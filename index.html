@@ -280,6 +280,7 @@ th{color:var(--text-dim);font-size:11px;text-transform:uppercase;font-weight:600
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script>
 /* =========================================================
    FIREBASE CONFIG
@@ -298,6 +299,8 @@ const firebaseConfig = {
 };
 
 let db = null;
+let auth = null;
+let authReady = Promise.resolve(null);
 let FIREBASE_OK = false;
 try{
   const placeholder = !firebaseConfig.apiKey || /SUBSTITUIR/i.test(JSON.stringify(firebaseConfig));
@@ -306,6 +309,8 @@ try{
   } else {
     firebase.initializeApp(firebaseConfig);
     db = firebase.firestore();
+    auth = firebase.auth();
+    authReady = new Promise(res=>{ const un = auth.onAuthStateChanged(u=>{ un(); res(u); }); });
     FIREBASE_OK = true;
   }
 }catch(e){
@@ -472,6 +477,27 @@ let selectedLoginUser = null;
 let pinBuffer = '';
 const PIN_LEN = 4;
 
+function pinPass(pin){ return 'DM-' + pin + '-oficina'; }
+function aliasEmail(name){
+  const slug = (name||'user').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'').slice(0,12) || 'user';
+  return slug + '.' + Math.random().toString(36).slice(2,7) + '@demotors.app';
+}
+// Cria uma conta de login sem terminar a sessão do administrador (app secundária)
+async function createAuthAccount(name, pin){
+  const email = aliasEmail(name);
+  const app2 = firebase.initializeApp(firebaseConfig, 'sec' + Date.now());
+  try{
+    const cred = await app2.auth().createUserWithEmailAndPassword(email, pinPass(pin));
+    await app2.auth().signOut();
+    return {uid: cred.user.uid, email};
+  } finally { try{ await app2.delete(); }catch(e){} }
+}
+async function createStaffAccount(name, role, pin){
+  if(!FIREBASE_OK){ return saveUserAccount({name, role, pin}); }
+  const {uid, email} = await createAuthAccount(name, pin);
+  await db.collection('staff').doc(uid).set({name, role, email});
+  return uid;
+}
 function localLoadUsers(){ users = JSON.parse(localStorage.getItem('oficina_users') || '[]'); }
 function localSaveUsers(){ localStorage.setItem('oficina_users', JSON.stringify(users)); }
 
@@ -479,7 +505,7 @@ function subscribeUsers(){
   if(FIREBASE_OK){
     let answered = false;
     setTimeout(()=>{ if(!answered){ console.warn('Sem resposta do Firebase — a usar dados locais.'); localLoadUsers(); afterUsersLoaded(); } }, 5000);
-    db.collection('users').orderBy('name').onSnapshot(snap=>{
+    db.collection('staff').orderBy('name').onSnapshot(snap=>{
       answered = true;
       users = snap.docs.map(d=>({id:d.id, ...d.data()}));
       afterUsersLoaded();
@@ -488,8 +514,16 @@ function subscribeUsers(){
     localLoadUsers(); afterUsersLoaded();
   }
 }
+let booted = false;
 function afterUsersLoaded(){
-  if(currentUser){ boot(); return; } // already logged in this device
+  if(FIREBASE_OK && currentUser && !booted){
+    authReady.then(u=>{
+      if(u && currentUser){ booted = true; boot(); }
+      else { currentUser = null; localStorage.removeItem('oficina_user'); loginState = users.length ? 'select' : 'bootstrap'; renderLogin(); }
+    });
+    return;
+  }
+  if(currentUser){ if(!booted){ booted = true; boot(); } return; } // already logged in this device
   loginState = users.length ? 'select' : 'bootstrap';
   renderLogin();
   if(document.getElementById('nav-team')) refreshTeamNavVisibility();
@@ -497,8 +531,8 @@ function afterUsersLoaded(){
 
 async function saveUserAccount(u){
   if(FIREBASE_OK){
-    if(u.id){ const id=u.id; const copy={...u}; delete copy.id; await db.collection('users').doc(id).set(copy,{merge:true}); return id; }
-    const ref = await db.collection('users').add(u); return ref.id;
+    if(u.id){ const id=u.id; const copy={...u}; delete copy.id; await db.collection('staff').doc(id).set(copy,{merge:true}); return id; }
+    const ref = await db.collection('staff').add(u); return ref.id;
   } else {
     if(u.id){ const idx=users.findIndex(x=>x.id===u.id); users[idx]=u; }
     else { u.id='local_user_'+Date.now(); users.push(u); }
@@ -507,7 +541,7 @@ async function saveUserAccount(u){
   }
 }
 async function deleteUserAccount(id){
-  if(FIREBASE_OK){ await db.collection('users').doc(id).delete(); }
+  if(FIREBASE_OK){ await db.collection('staff').doc(id).delete(); }
   else { users = users.filter(x=>x.id!==id); localSaveUsers(); if(currentView==='team') renderTeam(document.getElementById('main')); }
 }
 
@@ -533,7 +567,18 @@ function renderLogin(){
       if(!name){ toast('Escreva o seu nome'); return; }
       if(!/^\d{4}$/.test(pin)){ toast('O PIN deve ter 4 dígitos'); return; }
       if(pin!==pin2){ toast('Os PINs não coincidem'); return; }
-      const id = await saveUserAccount({name, role:'admin', pin});
+      let id;
+      try{
+        if(FIREBASE_OK){
+          const email = aliasEmail(name);
+          const cred = await auth.createUserWithEmailAndPassword(email, pinPass(pin));
+          id = cred.user.uid;
+          await db.collection('staff').doc(id).set({name, role:'admin', email});
+          await db.collection('meta').doc('setup').set({createdAt: Date.now()});
+        } else {
+          id = await saveUserAccount({name, role:'admin', pin});
+        }
+      }catch(err){ console.error(err); toast('Erro ao criar conta: ' + (err.code||err.message)); return; }
       currentUser = {id, name, role:'admin'};
       localStorage.setItem('oficina_user', JSON.stringify(currentUser));
       toast('Conta criada');
@@ -590,7 +635,20 @@ function renderPinDots(){
   if(!dots) return;
   dots.innerHTML = Array.from({length:PIN_LEN}).map((_,i)=>`<span class="${i<pinBuffer.length?'filled':''}"></span>`).join('');
 }
-function checkPin(){
+async function checkPin(){
+  if(FIREBASE_OK){
+    try{
+      await auth.signInWithEmailAndPassword(selectedLoginUser.email, pinPass(pinBuffer));
+      currentUser = {id:selectedLoginUser.id, name:selectedLoginUser.name, role:selectedLoginUser.role};
+      localStorage.setItem('oficina_user', JSON.stringify(currentUser));
+      booted = true; boot();
+    }catch(err){
+      console.warn(err);
+      toast(err.code==='auth/too-many-requests' ? 'Demasiadas tentativas — aguarde uns minutos' : 'PIN incorreto');
+      pinBuffer = ''; renderPinDots();
+    }
+    return;
+  }
   if(pinBuffer === (selectedLoginUser.pin||'')){
     currentUser = {id:selectedLoginUser.id, name:selectedLoginUser.name, role:selectedLoginUser.role};
     localStorage.setItem('oficina_user', JSON.stringify(currentUser));
@@ -602,8 +660,9 @@ function checkPin(){
   }
 }
 
-document.getElementById('logout-btn').addEventListener('click', ()=>{
+document.getElementById('logout-btn').addEventListener('click', async ()=>{
   localStorage.removeItem('oficina_user');
+  if(FIREBASE_OK){ try{ await auth.signOut(); }catch(e){} location.reload(); return; }
   currentUser = null;
   document.getElementById('app').style.display='none';
   document.getElementById('login-screen').style.display='flex';
@@ -1050,13 +1109,12 @@ function importBackup(e){
     try{
       const data = JSON.parse(reader.result);
       if(!confirm(FIREBASE_OK
-        ? `Isto vai ADICIONAR ${(data.vehicles||[]).length} viaturas, ${(data.inventory||[]).length} peças e ${(data.users||[]).length} utilizadores aos dados online existentes (não apaga nada). Continuar?`
+        ? `Isto vai ADICIONAR ${(data.vehicles||[]).length} viaturas, ${(data.inventory||[]).length} peças aos dados online existentes (os utilizadores não são importados) (não apaga nada). Continuar?`
         : `Isto vai substituir os dados atuais por: ${(data.vehicles||[]).length} viaturas, ${(data.inventory||[]).length} peças, ${(data.users||[]).length} utilizadores. Continuar?`
       )) return;
       if(FIREBASE_OK){
         for(const v of (data.vehicles||[])){ const copy={...v}; delete copy.id; await db.collection('vehicles').add(copy); }
         for(const i of (data.inventory||[])){ const copy={...i}; delete copy.id; await db.collection('inventory').add(copy); }
-        for(const u of (data.users||[])){ const copy={...u}; delete copy.id; await db.collection('users').add(copy); }
       } else {
         vehicles = data.vehicles || []; localSave();
         inventory = data.inventory || []; localSaveInv();
@@ -1105,7 +1163,8 @@ function renderTeam(main){
     const pin = document.getElementById('nu-pin').value.trim();
     if(!name){ toast('Escreva o nome'); return; }
     if(!/^\d{4}$/.test(pin)){ toast('O PIN deve ter 4 dígitos'); return; }
-    await saveUserAccount({name, role, pin});
+    try{ await createStaffAccount(name, role, pin); }
+    catch(err){ console.error(err); toast('Erro: ' + (err.code||err.message)); return; }
     toast('Utilizador adicionado');
     renderTeam(main);
   });
@@ -1129,7 +1188,14 @@ function renderTeam(main){
         const newPin = prompt(`Novo PIN de 4 dígitos para ${u.name}:`);
         if(newPin===null) return;
         if(!/^\d{4}$/.test(newPin.trim())){ toast('PIN inválido — deve ter 4 dígitos'); return; }
-        await saveUserAccount({...u, pin:newPin.trim()});
+        try{
+          if(FIREBASE_OK && u.id===currentUser.id){
+            await auth.currentUser.updatePassword(pinPass(newPin.trim()));
+          } else if(FIREBASE_OK){
+            const newId = await createStaffAccount(u.name, u.role, newPin.trim());
+            await db.collection('staff').doc(u.id).delete();
+          } else { await saveUserAccount({...u, pin:newPin.trim()}); }
+        }catch(err){ console.error(err); toast('Erro: ' + (err.code||err.message)); return; }
         toast('PIN atualizado');
       });
     });
