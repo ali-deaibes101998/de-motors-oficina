@@ -2,7 +2,7 @@
 <html lang="pt">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Gestão de Oficina — DE.MOTORS</title>
 <meta name="theme-color" content="#2C50A4">
 <meta name="mobile-web-app-capable" content="yes">
@@ -32,7 +32,7 @@
   --radius:8px;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
-html,body{background:#fafaf9;-webkit-tap-highlight-color:transparent;overscroll-behavior:none;}
+html,body{background:#fafaf9;-webkit-tap-highlight-color:transparent;overscroll-behavior:none;touch-action:pan-y;overflow-x:hidden;max-width:100vw;}
 body{color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;min-height:100vh;}
 h1,h2,h3,.headline{font-family:inherit;font-weight:700;letter-spacing:0;text-transform:none;}
 button{font-family:inherit;cursor:pointer;border:none;border-radius:var(--radius);}
@@ -200,6 +200,12 @@ th{color:var(--text-dim);font-size:11px;text-transform:uppercase;font-weight:600
 /* ===== Ajustes para telemóvel ===== */
 .row-item{grid-template-columns:minmax(0,1fr) 64px 92px 28px;}
 .row-item.svc{grid-template-columns:minmax(0,1fr) 110px 28px;}
+.row-item.nocost{grid-template-columns:minmax(0,1fr) 28px;}
+.row-item.nocost.prt{grid-template-columns:minmax(0,1fr) 64px 28px;}
+.stock-row.nocost{grid-template-columns:minmax(0,1fr) 80px 80px 28px;}
+.stock-row.nocost .mini.cost,.stock-row.nocost>span.cost{display:none;}
+@media (max-width:700px){.stock-row.nocost{grid-template-columns:1fr 1fr 28px;}}
+input[readonly].ro{background:#f5f5f4;color:#78716c;}
 .row-item input{padding:9px 8px;}
 .stock-row{grid-template-columns:minmax(0,1fr) 80px 80px 110px 28px;}
 .mini{margin:0;display:block;}
@@ -391,6 +397,7 @@ async function saveVehicle(v){
 }
 
 async function deleteVehicle(id){
+  if(!isOwner()){ toast('Apenas o dono pode eliminar'); return; }
   if(FIREBASE_OK){
     await db.collection('vehicles').doc(id).delete();
   } else {
@@ -437,6 +444,7 @@ async function saveInventoryItem(item){
   }
 }
 async function deleteInventoryItem(id){
+  if(!isOwner()){ toast('Apenas o dono pode eliminar'); return; }
   if(FIREBASE_OK){
     await db.collection('inventory').doc(id).delete();
   } else {
@@ -541,6 +549,7 @@ async function saveUserAccount(u){
   }
 }
 async function deleteUserAccount(id){
+  if(!isOwner()){ toast('Apenas o dono pode eliminar'); return; }
   if(FIREBASE_OK){ await db.collection('staff').doc(id).delete(); }
   else { users = users.filter(x=>x.id!==id); localSaveUsers(); if(currentView==='team') renderTeam(document.getElementById('main')); }
 }
@@ -605,7 +614,7 @@ function renderLogin(){
     users.forEach(u=>{
       const btn = document.createElement('button');
       btn.className = 'user-pick';
-      btn.innerHTML = `<span class="user-avatar">${(u.name||'?').charAt(0).toUpperCase()}</span><span><div>${u.name}</div><span class="u-role">${ROLE_LABELS[u.role]||''}</span></span>`;
+      btn.innerHTML = `<span class="user-avatar">${(u.name||'?').charAt(0).toUpperCase()}</span><span><div>${esc(u.name)}</div><span class="u-role">${ROLE_LABELS[u.role]||''}</span></span>`;
       btn.addEventListener('click', ()=>{ selectedLoginUser=u; pinBuffer=''; loginState='pin'; renderLogin(); });
       list.appendChild(btn);
     });
@@ -754,14 +763,26 @@ function boot(){
 
 /* ===================== Helpers ===================== */
 function money(n){
-  n = Number(n)||0;
-  return n.toLocaleString('pt-PT', {minimumFractionDigits:0}) + ' Kz';
+  n = Math.round(Number(n)||0);
+  const neg = n<0; n = Math.abs(n);
+  return (neg?'-':'') + String(n).replace(/\B(?=(\d{3})+(?!\d))/g,'\u00a0') + ' Kz';
 }
 function calcTotals(v){
   const services = (v.services||[]).reduce((s,x)=>s+(Number(x.cost)||0),0);
   const parts = (v.parts||[]).reduce((s,x)=>s+((Number(x.cost)||0)*(Number(x.qty)||1)),0);
   const labor = Number(v.laborCost)||0;
   return {services, parts, labor, total: services+parts+labor};
+}
+function esc(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function isOwner(){ return !!currentUser && currentUser.role==='admin'; }
+function canSeePrices(){ return !!currentUser && (currentUser.role==='admin' || currentUser.role==='recepcao'); }
+function paidAmountOf(v){ return Math.max(0, Number(v.paidAmount)||0); }
+function balanceOf(v){
+  const total = calcTotals(v).total;
+  const ps = v.paymentStatus || 'pending';
+  if(ps==='paid') return 0;
+  if(ps==='partial') return Math.max(0, total - paidAmountOf(v));
+  return total;
 }
 function fmtDate(ts){
   if(!ts) return '—';
@@ -814,9 +835,9 @@ function renderDashboard(main){
       const t = calcTotals(v);
       const card = document.createElement('div');
       card.className = 'car-card '+col.cls;
-      card.innerHTML = `<div class="plate">${v.plate||'—'}</div>
-        <div class="model">${v.make||''} ${v.model||''}</div>
-        <div class="meta"><span>${v.ownerName||''}</span><span>${money(t.total)}</span></div>`;
+      card.innerHTML = `<div class="plate">${esc(v.plate)||'—'}</div>
+        <div class="model">${esc(v.make)} ${esc(v.model)}</div>
+        <div class="meta"><span>${esc(v.ownerName)}</span><span>${canSeePrices()?money(t.total):''}</span></div>`;
       card.addEventListener('click', ()=>openVehicleModal(v.id));
       body.appendChild(card);
     });
@@ -836,31 +857,31 @@ function renderIntakeForm(main, existing){
     <div class="panel">
       <div class="section-title">Dados do Proprietário</div>
       <div class="grid3">
-        <div><label>Nome</label><input id="f-ownerName" value="${v.ownerName||''}"></div>
-        <div><label>Telefone</label><input id="f-ownerPhone" value="${v.ownerPhone||''}"></div>
-        <div><label>Nº Documento / NIF</label><input id="f-ownerDoc" value="${v.ownerDoc||''}"></div>
+        <div><label>Nome</label><input id="f-ownerName" value="${esc(v.ownerName)}"></div>
+        <div><label>Telefone</label><input id="f-ownerPhone" value="${esc(v.ownerPhone)}"></div>
+        <div><label>Nº Documento / NIF</label><input id="f-ownerDoc" value="${esc(v.ownerDoc)}"></div>
       </div>
 
       <div class="section-title">Dados da Viatura</div>
       <div class="grid3">
-        <div><label>Matrícula</label><input id="f-plate" value="${v.plate||''}" style="text-transform:uppercase;"></div>
-        <div><label>Marca</label><input id="f-make" value="${v.make||''}"></div>
-        <div><label>Modelo</label><input id="f-model" value="${v.model||''}"></div>
+        <div><label>Matrícula</label><input id="f-plate" value="${esc(v.plate)}" style="text-transform:uppercase;"></div>
+        <div><label>Marca</label><input id="f-make" value="${esc(v.make)}"></div>
+        <div><label>Modelo</label><input id="f-model" value="${esc(v.model)}"></div>
       </div>
       <div class="grid3">
-        <div><label>Ano</label><input id="f-year" value="${v.year||''}"></div>
-        <div><label>Cor</label><input id="f-color" value="${v.color||''}"></div>
-        <div><label>Nº Chassis (VIN)</label><input id="f-vin" value="${v.vin||''}"></div>
+        <div><label>Ano</label><input id="f-year" value="${esc(v.year)}"></div>
+        <div><label>Cor</label><input id="f-color" value="${esc(v.color)}"></div>
+        <div><label>Nº Chassis (VIN)</label><input id="f-vin" value="${esc(v.vin)}"></div>
       </div>
       <div class="grid3">
-        <div><label>Quilometragem</label><input id="f-mileage" value="${v.mileage||''}"></div>
+        <div><label>Quilometragem</label><input id="f-mileage" value="${esc(v.mileage)}"></div>
         <div><label>Data de Entrada</label><input type="date" id="f-dateIn" value="${v.dateIn||''}"></div>
         <div><label>Previsão de Entrega</label><input type="date" id="f-expectedDate" value="${v.expectedDate||''}"></div>
       </div>
 
       <div class="section-title">Motivo da Visita</div>
       <label>Descrição do problema / serviço pedido</label>
-      <textarea id="f-reason" rows="3">${v.reason||''}</textarea>
+      <textarea id="f-reason" rows="3">${esc(v.reason)}</textarea>
 
       <div class="section-title">Fotos da Viatura (estado na entrada)</div>
       <input type="file" id="f-photos" accept="image/*" multiple>
@@ -924,7 +945,7 @@ function renderVehiclesList(main){
   main.innerHTML = `
     <div class="pagehead"><h2>Todas as Viaturas</h2></div>
     <input class="search-bar" id="search-input" placeholder="Pesquisar por matrícula, proprietário ou modelo...">
-    <div class="filter-tabs" id="payment-tabs"></div>
+    <div class="filter-tabs" id="payment-tabs" style="${canSeePrices()?'':'display:none'}"></div>
     <div class="panel" id="vehicles-table-wrap"></div>
   `;
   document.getElementById('search-input').value = searchTerm;
@@ -969,7 +990,7 @@ function renderVehiclesList(main){
         (v.make||'').toLowerCase().includes(searchTerm)
       );
     }
-    if(paymentFilter !== 'all'){
+    if(canSeePrices() && paymentFilter !== 'all'){
       list = list.filter(v => (v.paymentStatus||'pending') === paymentFilter);
     }
     const wrap = document.getElementById('vehicles-table-wrap');
@@ -979,18 +1000,18 @@ function renderVehiclesList(main){
     }
     const payLabel = {paid:'Pago', pending:'Pendente', partial:'Parcial'};
     wrap.innerHTML = `<table class="rtable">
-      <thead><tr><th>Matrícula</th><th>Viatura</th><th>Proprietário</th><th>Entrada</th><th>Estado</th><th>Pagamento</th><th>Total</th><th></th></tr></thead>
+      <thead><tr><th>Matrícula</th><th>Viatura</th><th>Proprietário</th><th>Entrada</th><th>Estado</th>${canSeePrices()?'<th>Pagamento</th><th>Total</th>':''}<th></th></tr></thead>
       <tbody>${list.map(v=>{
         const t = calcTotals(v); const s = statusInfo(v.status);
         const ps = v.paymentStatus || 'pending';
         return `<tr>
-          <td class="c-plate"><b>${v.plate||'—'}</b></td>
-          <td class="c-car">${v.make||''} ${v.model||''}</td>
-          <td class="c-owner">${v.ownerName||'—'}</td>
+          <td class="c-plate"><b>${esc(v.plate)||'—'}</b></td>
+          <td class="c-car">${esc(v.make)} ${esc(v.model)}</td>
+          <td class="c-owner">${esc(v.ownerName)||'—'}</td>
           <td class="c-date">${fmtDate(v.dateIn)}</td>
           <td class="c-status">${s.label}</td>
-          <td class="c-pay"><span class="pill pill-${ps}">${payLabel[ps]}</span></td>
-          <td class="c-total">${money(t.total)}</td>
+          ${canSeePrices()?`<td class="c-pay"><span class="pill pill-${ps}">${payLabel[ps]}</span></td>
+          <td class="c-total">${money(t.total)}</td>`:''}
           <td class="c-btn"><button class="btn small secondary" data-id="${v.id}">Abrir</button></td>
         </tr>`;
       }).join('')}</tbody>
@@ -1006,7 +1027,7 @@ function renderInventory(main){
   main.innerHTML = `
     <div class="pagehead"><h2>Estoque de Peças</h2><button class="btn" id="add-inv-btn">+ Nova Peça</button></div>
     <div class="panel">
-      <div class="stock-row header"><span>Peça</span><span>Qtd.</span><span>Mín.</span><span>Custo Unit.</span><span></span></div>
+      <div class="stock-row header ${isOwner()?'':'nocost'}"><span>Peça</span><span>Qtd.</span><span>Mín.</span><span class="cost">Custo Unit.</span><span></span></div>
       <div id="inv-rows"></div>
     </div>
   `;
@@ -1020,12 +1041,12 @@ function renderInventory(main){
     if(!inventory.length){ wrap.innerHTML = '<div class="empty-state">Sem peças registadas. Adicione a primeira.</div>'; return; }
     wrap.innerHTML = inventory.map(i=>{
       const low = Number(i.qty) <= Number(i.minQty||0);
-      return `<div class="stock-row ${low?'low':''}" data-id="${i.id}">
-        <input class="inv-name" placeholder="Nome da peça" value="${i.name||''}">
+      return `<div class="stock-row ${low?'low':''} ${isOwner()?'':'nocost'}" data-id="${i.id}">
+        <input class="inv-name" placeholder="Nome da peça" value="${esc(i.name)}">
         <label class="mini"><span>Qtd.</span><input class="inv-qty" type="number" value="${i.qty||0}"></label>
         <label class="mini"><span>Mín.</span><input class="inv-min" type="number" value="${i.minQty||0}"></label>
-        <label class="mini"><span>Custo unit.</span><input class="inv-cost" type="number" value="${i.cost||0}"></label>
-        <button class="close-x inv-del" style="font-size:18px;">&times;</button>
+        <label class="mini cost"><span>Custo unit.</span><input class="inv-cost" type="number" value="${i.cost||0}"></label>
+        ${isOwner() ? `<button class="close-x inv-del" style="font-size:18px;">&times;</button>` : '<span></span>'}
       </div>`;
     }).join('');
     wrap.querySelectorAll('.stock-row').forEach(row=>{
@@ -1037,12 +1058,13 @@ function renderInventory(main){
           name: row.querySelector('.inv-name').value,
           qty: row.querySelector('.inv-qty').value,
           minQty: row.querySelector('.inv-min').value,
-          cost: row.querySelector('.inv-cost').value,
+          cost: isOwner() ? row.querySelector('.inv-cost').value : (item ? item.cost : 0),
         });
       };
       row.querySelectorAll('input').forEach(inp=>inp.addEventListener('change', commit));
-      row.querySelector('.inv-del').addEventListener('click', ()=>{
-        if(confirm('Eliminar esta peça do estoque?')) deleteInventoryItem(id).then(()=>renderInventory(main));
+      const _idel = row.querySelector('.inv-del');
+      if(_idel) _idel.addEventListener('click', ()=>{
+        if(isOwner() && confirm('Eliminar esta peça do estoque?')) deleteInventoryItem(id).then(()=>renderInventory(main));
       });
     });
   }
@@ -1058,8 +1080,8 @@ function renderReminders(main){
         const overdue = new Date(v.nextServiceDate).getTime() < Date.now();
         return `<div class="reminder-card ${overdue?'overdue':''}" data-id="${v.id}">
           <div class="info">
-            <b>${v.plate} — ${v.make||''} ${v.model||''}</b>
-            <span>${v.ownerName||'—'} · ${v.ownerPhone||'—'} · Revisão prevista: ${fmtDate(v.nextServiceDate)}${overdue?' (atrasada)':''}</span>
+            <b>${esc(v.plate)} — ${esc(v.make)} ${esc(v.model)}</b>
+            <span>${esc(v.ownerName)||'—'} · ${esc(v.ownerPhone)||'—'} · Revisão prevista: ${fmtDate(v.nextServiceDate)}${overdue?' (atrasada)':''}</span>
           </div>
           <button class="btn small secondary mark-contacted">Marcar como contactado</button>
         </div>`;
@@ -1083,7 +1105,7 @@ function renderReports(main){
   const delivered = vehicles.filter(v=>v.status==='delivered');
   const inShop = vehicles.filter(v=>v.status!=='delivered');
   const revenue = delivered.reduce((s,v)=>s+calcTotals(v).total,0);
-  const pending = vehicles.filter(v=>v.paymentStatus!=='paid').reduce((s,v)=>s+calcTotals(v).total,0);
+  const pending = vehicles.reduce((s,v)=>s+balanceOf(v),0);
   const counts = {};
   vehicles.forEach(v=>{ const k=(v.reason||'—').slice(0,40); counts[k]=(counts[k]||0)+1; });
   const topReasons = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5);
@@ -1101,20 +1123,20 @@ function renderReports(main){
     <div class="pagehead"><h2>Relatórios</h2></div>
     <div class="grid3">
       <div class="panel"><div class="section-title">Viaturas na Oficina</div><div style="font-size:32px;font-weight:800;">${inShop.length}</div></div>
-      <div class="panel"><div class="section-title">Total Entregue (histórico)</div><div style="font-size:32px;font-weight:800;color:var(--orange);">${money(revenue)}</div></div>
-      <div class="panel"><div class="section-title">Pagamentos Pendentes</div><div style="font-size:32px;font-weight:800;color:var(--red);">${money(pending)}</div></div>
+      ${canSeePrices() ? `<div class="panel"><div class="section-title">Total Entregue (histórico)</div><div style="font-size:32px;font-weight:800;color:var(--orange);">${money(revenue)}</div></div>
+      <div class="panel"><div class="section-title">Pagamentos Pendentes</div><div style="font-size:32px;font-weight:800;color:var(--red);">${money(pending)}</div></div>` : ''}
     </div>
     <div class="panel">
       <div class="section-title">Motivos mais frequentes</div>
       ${topReasons.length? topReasons.map(([r,c])=>`<div class="hist-item" style="display:flex;justify-content:space-between;"><span>${r}</span><span>${c}</span></div>`).join('') : '<div class="empty-state">Sem dados ainda.</div>'}
     </div>
-    <div class="panel">
+    ${isOwner() ? `<div class="panel">
       <div class="section-title">Desempenho por Mecânico</div>
       ${mechRows.length ? `<table><thead><tr><th>Mecânico</th><th>Viaturas Entregues</th><th>Receita Gerada</th></tr></thead><tbody>
         ${mechRows.map(([name,s])=>`<tr><td>${name}</td><td>${s.count}</td><td>${money(s.revenue)}</td></tr>`).join('')}
       </tbody></table>` : '<div class="empty-state">Sem viaturas entregues ainda.</div>'}
-    </div>
-    <div class="panel">
+    </div>` : ''}
+    ${isOwner() ? `<div class="panel">
       <div class="section-title">Cópia de Segurança (Backup)</div>
       <p style="font-size:13px;color:var(--text-dim);text-transform:none;margin-bottom:12px;">
         ${FIREBASE_OK ? 'Os seus dados já estão sincronizados online, mas pode exportar uma cópia local a qualquer momento.' : 'A app está a guardar os dados apenas neste telefone. Exporte uma cópia regularmente para não perder nada se limpar o navegador ou trocar de telefone.'}
@@ -1124,11 +1146,13 @@ function renderReports(main){
         <button class="btn secondary" id="import-backup-btn">Importar Cópia de Segurança</button>
         <input type="file" id="import-backup-file" accept="application/json" style="display:none;">
       </div>
-    </div>
+    </div>` : ''}
   `;
-  document.getElementById('export-backup-btn').addEventListener('click', exportBackup);
-  document.getElementById('import-backup-btn').addEventListener('click', ()=>document.getElementById('import-backup-file').click());
-  document.getElementById('import-backup-file').addEventListener('change', importBackup);
+  if(isOwner()){
+    document.getElementById('export-backup-btn').addEventListener('click', exportBackup);
+    document.getElementById('import-backup-btn').addEventListener('click', ()=>document.getElementById('import-backup-file').click());
+    document.getElementById('import-backup-file').addEventListener('change', importBackup);
+  }
 }
 
 function exportBackup(){
@@ -1219,7 +1243,7 @@ function renderTeam(main){
     if(!users.length){ wrap.innerHTML = '<div class="empty-state">Sem utilizadores.</div>'; return; }
     wrap.innerHTML = users.map(u=>`
       <div class="team-row" data-id="${u.id}">
-        <div><div class="u-name">${u.name}${u.id===currentUser.id?' (você)':''}</div><span class="u-role">${ROLE_LABELS[u.role]||''}</span></div>
+        <div><div class="u-name">${esc(u.name)}${u.id===currentUser.id?' (você)':''}</div><span class="u-role">${ROLE_LABELS[u.role]||''}</span></div>
         <div style="display:flex;gap:8px;">
           <button class="btn small secondary reset-pin-btn">Repor PIN</button>
           ${u.id!==currentUser.id ? `<button class="btn small danger del-user-btn">Remover</button>` : ''}
@@ -1268,8 +1292,8 @@ function openVehicleModal(id){
   overlay.innerHTML = `<div class="modal">
     <div class="modal-head no-print">
       <div>
-        <h2 style="font-size:20px;">${v.plate}</h2>
-        <div style="color:var(--text-dim);font-size:13px;text-transform:none;">${v.make||''} ${v.model||''} · ${v.ownerName||''}</div>
+        <h2 style="font-size:20px;">${esc(v.plate)}</h2>
+        <div style="color:var(--text-dim);font-size:13px;text-transform:none;">${esc(v.make)} ${esc(v.model)} · ${esc(v.ownerName)}</div>
       </div>
       <button class="close-x">&times;</button>
     </div>
@@ -1279,23 +1303,23 @@ function openVehicleModal(id){
       ${STATUS.map(s=>`<option value="${s.key}" ${v.status===s.key?'selected':''}>${s.label}</option>`).join('')}
     </select>
 
-    <div class="section-title">Diagnóstico</div>
-    <textarea id="m-diagnosis" rows="2">${v.diagnosis||''}</textarea>
+    <div class="section-title">Observações do Diagnóstico</div>
+    <textarea id="m-diagnosis" rows="2">${esc(v.diagnosis)}</textarea>
 
-    <div class="section-title">Serviços / Mão de Obra</div>
+    <div class="section-title">Diagnóstico / Mão de Obra</div>
     <div id="services-rows"></div>
-    <button class="addrow-btn" id="add-service">+ Adicionar serviço</button>
+    <button class="addrow-btn" id="add-service">+ Adicionar diagnóstico</button>
 
     <div class="section-title">Peças Utilizadas</div>
     <div id="parts-rows"></div>
     <button class="addrow-btn" id="add-part">+ Adicionar peça</button>
 
     <div class="grid2" style="margin-top:16px;">
-      <div><label>Custo de Mão de Obra Adicional</label><input id="m-labor" type="number" value="${v.laborCost||0}"></div>
-      <div><label>Mecânico Responsável</label><input id="m-mechanic" value="${v.mechanic||''}"></div>
+      ${canSeePrices() ? `<div><label>Custo de Mão de Obra Adicional</label><input id="m-labor" type="number" value="${v.laborCost||0}" ${isOwner()?'':'readonly class="ro"'}></div>` : ''}
+      <div><label>Mecânico Responsável</label><input id="m-mechanic" value="${esc(v.mechanic)}"></div>
     </div>
 
-    <div class="totals-box" id="totals-box"></div>
+    ${canSeePrices() ? `<div class="totals-box" id="totals-box"></div>
 
     <div class="grid2" style="margin-top:16px;">
       <div><label>Estado do Pagamento</label>
@@ -1305,8 +1329,14 @@ function openVehicleModal(id){
           <option value="paid" ${v.paymentStatus==='paid'?'selected':''}>Pago</option>
         </select>
       </div>
-      <div><label>Método de Pagamento</label><input id="m-payment-method" value="${v.paymentMethod||''}"></div>
+      <div><label>Método de Pagamento</label><input id="m-payment-method" value="${esc(v.paymentMethod)}"></div>
     </div>
+    <div id="paid-wrap" style="margin-top:6px;${v.paymentStatus==='partial'?'':'display:none;'}">
+      <div class="grid2">
+        <div><label>Valor já pago (Kz)</label><input id="m-paid-amount" type="number" min="0" value="${paidAmountOf(v)}"></div>
+        <div><label>Em falta</label><div id="m-balance" style="font-weight:700;padding:11px 0;"></div></div>
+      </div>
+    </div>` : ''}
 
     <div class="section-title">Fotos de Entrada</div>
     <div class="photo-thumbs">${(v.photos||[]).map(p=>`<img src="${p}">`).join('') || '<div style="color:var(--text-dim);font-size:13px;">Sem fotos.</div>'}</div>
@@ -1318,11 +1348,11 @@ function openVehicleModal(id){
     <div class="section-title">Próxima Revisão / Manutenção</div>
     <div class="grid2">
       <div><label>Data prevista</label><input type="date" id="m-next-service" value="${v.nextServiceDate||''}"></div>
-      <div><label>Quilometragem prevista</label><input id="m-next-service-km" value="${v.nextServiceKm||''}"></div>
+      <div><label>Quilometragem prevista</label><input id="m-next-service-km" value="${esc(v.nextServiceKm)}"></div>
     </div>
 
     <div class="section-title">Assinatura do Cliente (na entrega)</div>
-    ${v.signature ? `<div class="photo-thumbs"><img src="${v.signature}" style="background:#fff;width:160px;height:auto;"></div><button class="btn small secondary no-print" id="redo-sig-btn" style="margin-top:8px;">Nova Assinatura</button>` : `
+    ${v.signature ? `<div class="photo-thumbs"><img src="${v.signature}" style="background:#fff;width:160px;height:auto;"></div>${isOwner() ? `<button class="btn small secondary no-print" id="redo-sig-btn" style="margin-top:8px;">Nova Assinatura</button>` : ''}` : `
     <div class="sig-wrap no-print"><canvas id="sig-pad" class="signature-pad"></canvas></div>
     <div class="no-print" style="margin-top:6px;display:flex;gap:8px;">
       <button class="btn small secondary" id="clear-sig-btn">Limpar</button>
@@ -1330,7 +1360,7 @@ function openVehicleModal(id){
     </div>`}
 
     <div class="section-title">Notas</div>
-    <div id="notes-list">${(v.notes||[]).map(n=>`<div class="note-item">${n.text}<div class="meta">${n.author} · ${fmtDate(n.date)}</div></div>`).join('')}</div>
+    <div id="notes-list">${(v.notes||[]).map(n=>`<div class="note-item">${esc(n.text)}<div class="meta">${esc(n.author)} · ${fmtDate(n.date)}</div></div>`).join('')}</div>
     <div style="display:flex;gap:8px;margin-top:6px;">
       <input id="new-note" placeholder="Escrever nota...">
       <button class="btn small" id="add-note-btn">Adicionar</button>
@@ -1338,11 +1368,11 @@ function openVehicleModal(id){
 
     <div class="no-print" style="margin-top:24px;display:flex;gap:10px;flex-wrap:wrap;">
       <button class="btn" id="save-modal-btn">Guardar</button>
-      <button class="btn secondary" id="proforma-btn">Proforma (Orçamento)</button>
-      <button class="btn secondary" id="invoice-btn">Ver / Imprimir Fatura</button>
+      ${canSeePrices() ? `<button class="btn secondary" id="proforma-btn">Proforma (Orçamento)</button>
+      <button class="btn secondary" id="invoice-btn">Ver / Imprimir Fatura</button>` : ''}
       <button class="btn secondary" id="report-btn">Relatório de Manutenção (PDF)</button>
       <button class="btn secondary" id="edit-full-btn">Editar Dados da Viatura</button>
-      <button class="btn danger" id="delete-btn">Eliminar</button>
+      ${isOwner() ? `<button class="btn danger" id="delete-btn">Eliminar</button>` : ''}
     </div>
   </div>`;
   document.body.appendChild(overlay);
@@ -1352,10 +1382,10 @@ function openVehicleModal(id){
 
   function renderServiceRows(){
     document.getElementById('services-rows').innerHTML = services.map((s,i)=>`
-      <div class="row-item svc">
-        <input data-i="${i}" class="svc-desc" placeholder="Descrição" value="${s.desc||''}">
-        <input data-i="${i}" class="svc-cost" type="number" placeholder="Custo" value="${s.cost||0}">
-        <button data-i="${i}" class="close-x svc-del" style="font-size:18px;">&times;</button>
+      <div class="row-item svc ${canSeePrices()?'':'nocost'}">
+        <input data-i="${i}" class="svc-desc" placeholder="Descrição" value="${esc(s.desc)}">
+        ${canSeePrices() ? `<input data-i="${i}" class="svc-cost ${isOwner()?'':'ro'}" type="number" placeholder="Custo" value="${s.cost||0}" ${isOwner()?'':'readonly'}>` : ''}
+        ${isOwner() || !(s.desc||s.cost) || s._new ? `<button data-i="${i}" class="close-x svc-del" style="font-size:18px;">&times;</button>` : '<span></span>'}
       </div>`).join('');
     document.querySelectorAll('.svc-desc').forEach(el=>el.addEventListener('input', e=>{services[e.target.dataset.i].desc=e.target.value;}));
     document.querySelectorAll('.svc-cost').forEach(el=>el.addEventListener('input', e=>{services[e.target.dataset.i].cost=e.target.value; updateTotals();}));
@@ -1363,11 +1393,11 @@ function openVehicleModal(id){
   }
   function renderPartRows(){
     document.getElementById('parts-rows').innerHTML = parts.map((p,i)=>`
-      <div class="row-item">
-        <input data-i="${i}" class="prt-name" placeholder="Nome da peça" value="${p.name||''}">
+      <div class="row-item prt ${canSeePrices()?'':'nocost'}">
+        <input data-i="${i}" class="prt-name" placeholder="Nome da peça" value="${esc(p.name)}">
         <input data-i="${i}" class="prt-qty" type="number" placeholder="Qtd" value="${p.qty||1}">
-        <input data-i="${i}" class="prt-cost" type="number" placeholder="Custo unit." value="${p.cost||0}">
-        <button data-i="${i}" class="close-x prt-del" style="font-size:18px;">&times;</button>
+        ${canSeePrices() ? `<input data-i="${i}" class="prt-cost ${isOwner()?'':'ro'}" type="number" placeholder="Custo unit." value="${p.cost||0}" ${isOwner()?'':'readonly'}>` : ''}
+        ${isOwner() || p._new ? `<button data-i="${i}" class="close-x prt-del" style="font-size:18px;">&times;</button>` : '<span></span>'}
       </div>`).join('');
     document.querySelectorAll('.prt-name').forEach(el=>el.addEventListener('input', e=>{parts[e.target.dataset.i].name=e.target.value;}));
     document.querySelectorAll('.prt-qty').forEach(el=>el.addEventListener('input', e=>{parts[e.target.dataset.i].qty=e.target.value; updateTotals();}));
@@ -1375,20 +1405,32 @@ function openVehicleModal(id){
     document.querySelectorAll('.prt-del').forEach(el=>el.addEventListener('click', e=>{parts.splice(e.target.dataset.i,1); renderPartRows(); updateTotals();}));
   }
   function updateTotals(){
-    const labor = Number(document.getElementById('m-labor').value)||0;
+    const tb = document.getElementById('totals-box'); if(!tb) return;
+    const laborEl = document.getElementById('m-labor');
+    const labor = laborEl ? (Number(laborEl.value)||0) : (Number(v.laborCost)||0);
     const sTotal = services.reduce((s,x)=>s+(Number(x.cost)||0),0);
     const pTotal = parts.reduce((s,x)=>s+((Number(x.cost)||0)*(Number(x.qty)||1)),0);
     document.getElementById('totals-box').innerHTML = `
-      <div class="totals-row"><span>Serviços</span><span>${money(sTotal)}</span></div>
+      <div class="totals-row"><span>Diagnóstico</span><span>${money(sTotal)}</span></div>
       <div class="totals-row"><span>Peças</span><span>${money(pTotal)}</span></div>
       <div class="totals-row"><span>Mão de obra adicional</span><span>${money(labor)}</span></div>
       <div class="totals-row grand"><span>Total</span><span>${money(sTotal+pTotal+labor)}</span></div>
     `;
   }
   renderServiceRows(); renderPartRows(); updateTotals();
-  document.getElementById('m-labor').addEventListener('input', updateTotals);
-  document.getElementById('add-service').addEventListener('click', ()=>{services.push({desc:'',cost:0}); renderServiceRows();});
-  document.getElementById('add-part').addEventListener('click', ()=>{parts.push({name:'',qty:1,cost:0}); renderPartRows();});
+  const _lab = document.getElementById('m-labor'); if(_lab) _lab.addEventListener('input', updateTotals);
+  const _ps = document.getElementById('m-payment-status');
+  function updateBalance(){
+    if(!_ps) return;
+    const pw = document.getElementById('paid-wrap'); pw.style.display = _ps.value==='partial' ? '' : 'none';
+    const labor = _lab ? (Number(_lab.value)||0) : (Number(v.laborCost)||0);
+    const total = services.reduce((a,x)=>a+(Number(x.cost)||0),0)+parts.reduce((a,x)=>a+((Number(x.cost)||0)*(Number(x.qty)||1)),0)+labor;
+    const paid = Number(document.getElementById('m-paid-amount').value)||0;
+    document.getElementById('m-balance').textContent = money(Math.max(0,total-paid));
+  }
+  if(_ps){ _ps.addEventListener('change', updateBalance); document.getElementById('m-paid-amount').addEventListener('input', updateBalance); document.querySelectorAll('.svc-cost,.prt-cost,.prt-qty').forEach(el=>el.addEventListener('input', updateBalance)); updateBalance(); }
+  document.getElementById('add-service').addEventListener('click', ()=>{services.push({desc:'',cost:0,_new:true}); renderServiceRows();});
+  document.getElementById('add-part').addEventListener('click', ()=>{parts.push({name:'',qty:1,cost:0,_new:true}); renderPartRows();});
 
   overlay.querySelector('.close-x').addEventListener('click', ()=>overlay.remove());
   overlay.addEventListener('click', (e)=>{ if(e.target===overlay) overlay.remove(); });
@@ -1472,11 +1514,12 @@ function openVehicleModal(id){
       ...v,
       status: document.getElementById('m-status').value,
       diagnosis: document.getElementById('m-diagnosis').value,
-      services, parts,
-      laborCost: document.getElementById('m-labor').value,
+      services: services.map(({_new, ...x})=>x), parts: parts.map(({_new, ...x})=>x),
+      laborCost: _lab ? _lab.value : (v.laborCost||0),
       mechanic: document.getElementById('m-mechanic').value,
-      paymentStatus: document.getElementById('m-payment-status').value,
-      paymentMethod: document.getElementById('m-payment-method').value,
+      paymentStatus: _ps ? _ps.value : (v.paymentStatus||'pending'),
+      paymentMethod: _ps ? document.getElementById('m-payment-method').value : (v.paymentMethod||''),
+      paidAmount: _ps ? (_ps.value==='paid' ? calcTotals({services, parts, laborCost: _lab?_lab.value:v.laborCost}).total : (_ps.value==='partial' ? (Number(document.getElementById('m-paid-amount').value)||0) : 0)) : (v.paidAmount||0),
       progressPhotos: pendingProgressPhotos,
       nextServiceDate: newNextServiceDate,
       nextServiceKm: document.getElementById('m-next-service-km').value,
@@ -1495,7 +1538,9 @@ function openVehicleModal(id){
     renderIntakeForm(document.getElementById('main'), v);
   });
 
-  document.getElementById('delete-btn').addEventListener('click', async ()=>{
+  const _delBtn = document.getElementById('delete-btn');
+  if(_delBtn) _delBtn.addEventListener('click', async ()=>{
+    if(!isOwner()) return;
     if(confirm('Eliminar esta viatura e todo o seu histórico? Esta ação não pode ser desfeita.')){
       await deleteVehicle(id);
       overlay.remove();
@@ -1503,24 +1548,28 @@ function openVehicleModal(id){
     }
   });
 
-  document.getElementById('proforma-btn').addEventListener('click', ()=>{
-    openInvoice(v, services, parts, document.getElementById('m-labor').value, 'proforma');
-  });
-  document.getElementById('invoice-btn').addEventListener('click', ()=>{
-    openInvoice(v, services, parts, document.getElementById('m-labor').value);
-  });
+  const _pf = document.getElementById('proforma-btn'), _inv = document.getElementById('invoice-btn');
+  const curPay = ()=>({status: _ps ? _ps.value : (v.paymentStatus||'pending'), paid: Number((document.getElementById('m-paid-amount')||{}).value)||0, method: (document.getElementById('m-payment-method')||{}).value||''});
+  if(_pf) _pf.addEventListener('click', ()=>{ openInvoice(v, services, parts, _lab.value, 'proforma', curPay()); });
+  if(_inv) _inv.addEventListener('click', ()=>{ openInvoice(v, services, parts, _lab.value, 'invoice', curPay()); });
   document.getElementById('report-btn').addEventListener('click', ()=>{
     openMaintenanceReport(v, services, parts, pendingProgressPhotos);
   });
 }
 
 /* ===================== Invoice ===================== */
-function openInvoice(v, services, parts, labor, mode){
+function openInvoice(v, services, parts, labor, mode, pay){
   const isPro = mode === 'proforma';
+  pay = pay || {status: v.paymentStatus||'pending', paid: paidAmountOf(v), method: v.paymentMethod||''};
   const sTotal = services.reduce((s,x)=>s+(Number(x.cost)||0),0);
   const pTotal = parts.reduce((s,x)=>s+((Number(x.cost)||0)*(Number(x.qty)||1)),0);
   const laborN = Number(labor)||0;
   const grand = sTotal+pTotal+laborN;
+  const now = new Date();
+  const pad2 = n=>String(n).padStart(2,'0');
+  const docNo = (isPro?'PF':'FT') + '-' + String(v.plate||'').toUpperCase().replace(/[^A-Z0-9]/g,'') + '-' + pad2(now.getDate()) + pad2(now.getMonth()+1) + String(now.getFullYear()).slice(2);
+  const validUntil = new Date(now.getTime() + 15*86400000).toLocaleDateString('pt-PT');
+  const paidN = pay.status==='paid' ? grand : (pay.status==='partial' ? Math.min(grand, Number(pay.paid)||0) : 0);
   const overlay = document.createElement('div');
   overlay.className='modal-overlay';
   overlay.innerHTML = `<div class="modal">
@@ -1530,25 +1579,25 @@ function openInvoice(v, services, parts, labor, mode){
     </div>
     <img src="${document.querySelector('.top-logo').src}" alt="DE.MOTORS" style="height:34px;width:auto;display:block;margin-bottom:14px;">
     <h1 style="color:var(--orange);">${isPro ? 'FATURA PROFORMA' : 'FATURA'}</h1>
-    <div style="color:var(--text-dim);font-size:13px;margin-bottom:20px;">Data: ${new Date().toLocaleDateString('pt-PT')}${isPro ? ' · Válida por 15 dias' : ''}</div>
+    <div style="color:var(--text-dim);font-size:13px;margin-bottom:20px;">Nº ${docNo} · Data: ${now.toLocaleDateString('pt-PT')}${isPro ? ' · Válida até ' + validUntil : ''}</div>
     <div class="grid2">
-      <div><label>Cliente</label><div>${v.ownerName||'—'}</div></div>
-      <div><label>Telefone</label><div>${v.ownerPhone||'—'}</div></div>
+      <div><label>Cliente</label><div>${esc(v.ownerName)||'—'}</div></div>
+      <div><label>Telefone</label><div>${esc(v.ownerPhone)||'—'}</div></div>
     </div>
     <div class="grid2">
-      <div><label>Viatura</label><div>${v.make||''} ${v.model||''} (${v.year||''})</div></div>
-      <div><label>Matrícula</label><div>${v.plate}</div></div>
+      <div><label>Viatura</label><div>${esc(v.make)} ${esc(v.model)}${v.year?' ('+esc(v.year)+')':''}</div></div>
+      <div><label>Matrícula</label><div>${esc(v.plate)}</div></div>
     </div>
-    <div class="section-title">Serviços</div>
+    <div class="section-title">Diagnóstico</div>
     <table><thead><tr><th>Descrição</th><th>Valor</th></tr></thead><tbody>
-      ${services.map(s=>`<tr><td>${s.desc||'—'}</td><td>${money(s.cost)}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}
+      ${services.map(s=>`<tr><td>${esc(s.desc)||'—'}</td><td>${money(s.cost)}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}
     </tbody></table>
     <div class="section-title">Peças</div>
     <table><thead><tr><th>Peça</th><th>Qtd</th><th>Unit.</th><th>Subtotal</th></tr></thead><tbody>
-      ${parts.map(p=>`<tr><td>${p.name||'—'}</td><td>${p.qty||1}</td><td>${money(p.cost)}</td><td>${money((Number(p.cost)||0)*(Number(p.qty)||1))}</td></tr>`).join('') || '<tr><td colspan="4">—</td></tr>'}
-    </table>
+      ${parts.map(p=>`<tr><td>${esc(p.name)||'—'}</td><td>${p.qty||1}</td><td>${money(p.cost)}</td><td>${money((Number(p.cost)||0)*(Number(p.qty)||1))}</td></tr>`).join('') || '<tr><td colspan="4">—</td></tr>'}
+    </tbody></table>
     <div class="totals-box">
-      <div class="totals-row"><span>Serviços</span><span>${money(sTotal)}</span></div>
+      <div class="totals-row"><span>Diagnóstico</span><span>${money(sTotal)}</span></div>
       <div class="totals-row"><span>Peças</span><span>${money(pTotal)}</span></div>
       <div class="totals-row"><span>Mão de obra adicional</span><span>${money(laborN)}</span></div>
       <div class="totals-row grand"><span>TOTAL</span><span>${money(grand)}</span></div>
@@ -1556,7 +1605,11 @@ function openInvoice(v, services, parts, labor, mode){
     ${isPro
       ? `<div style="margin-top:20px;font-size:12px;color:var(--text-dim);">Este documento é uma proforma (orçamento) e não serve como fatura nem comprovativo de pagamento. Os valores podem ser ajustados após o diagnóstico final.</div>
          <div style="margin-top:36px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:12px;color:var(--text-dim);"><div style="border-top:1px solid var(--border-strong);padding-top:6px;">Oficina</div><div style="border-top:1px solid var(--border-strong);padding-top:6px;">Cliente (aceito)</div></div>`
-      : `<div style="margin-top:20px;font-size:12px;color:var(--text-dim);">Estado do pagamento: ${v.paymentStatus==='paid'?'Pago':v.paymentStatus==='partial'?'Parcial':'Pendente'}</div>`}
+      : `<div style="margin-top:20px;font-size:13px;">
+         <div><b>Estado do pagamento:</b> ${pay.status==='paid'?'Pago':pay.status==='partial'?'Parcial':'Pendente'}${pay.method?' · '+esc(pay.method):''}</div>
+         ${pay.status==='partial' ? `<div>Valor pago: ${money(paidN)} · Em falta: <b>${money(Math.max(0,grand-paidN))}</b></div>` : ''}
+         ${pay.status==='pending' ? `<div>Valor a pagar: <b>${money(grand)}</b></div>` : ''}
+       </div>`}
   </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('.close-inv').addEventListener('click', ()=>overlay.remove());
@@ -1580,13 +1633,13 @@ function openMaintenanceReport(v, services, parts, progressPhotos){
     <div style="color:var(--text-dim);text-transform:none;font-size:13px;margin-bottom:20px;">Emitido em: ${new Date().toLocaleDateString('pt-PT')}</div>
 
     <div class="grid2">
-      <div><label>Cliente</label><div>${v.ownerName||'—'}</div></div>
-      <div><label>Telefone</label><div>${v.ownerPhone||'—'}</div></div>
+      <div><label>Cliente</label><div>${esc(v.ownerName)||'—'}</div></div>
+      <div><label>Telefone</label><div>${esc(v.ownerPhone)||'—'}</div></div>
     </div>
     <div class="grid3">
-      <div><label>Viatura</label><div>${v.make||''} ${v.model||''} (${v.year||''})</div></div>
-      <div><label>Matrícula</label><div>${v.plate}</div></div>
-      <div><label>Quilometragem na entrada</label><div>${v.mileage||'—'}</div></div>
+      <div><label>Viatura</label><div>${esc(v.make)} ${esc(v.model)}${v.year?' ('+esc(v.year)+')':''}</div></div>
+      <div><label>Matrícula</label><div>${esc(v.plate)}</div></div>
+      <div><label>Quilometragem na entrada</label><div>${esc(v.mileage)||'—'}</div></div>
     </div>
     <div class="grid3">
       <div><label>Data de Entrada</label><div>${fmtDate(v.dateIn)}</div></div>
@@ -1595,28 +1648,28 @@ function openMaintenanceReport(v, services, parts, progressPhotos){
     </div>
 
     <div class="section-title">Motivo da Visita</div>
-    <div style="font-size:14px;">${v.reason || '—'}</div>
+    <div style="font-size:14px;">${esc(v.reason)||'—'}</div>
 
-    <div class="section-title">Diagnóstico</div>
-    <div style="font-size:14px;">${v.diagnosis || '—'}</div>
+    <div class="section-title">Observações do Diagnóstico</div>
+    <div style="font-size:14px;">${esc(v.diagnosis)||'—'}</div>
 
-    <div class="section-title">Serviços Realizados</div>
+    <div class="section-title">Diagnóstico Realizado</div>
     <table><thead><tr><th>Descrição</th></tr></thead><tbody>
-      ${services.length? services.map(x=>`<tr><td>${x.desc||'—'}</td></tr>`).join('') : '<tr><td>Nenhum serviço registado.</td></tr>'}
+      ${services.length? services.map(x=>`<tr><td>${esc(x.desc)||'—'}</td></tr>`).join('') : '<tr><td>Nenhum diagnóstico registado.</td></tr>'}
     </tbody></table>
 
     <div class="section-title">Peças Substituídas</div>
     <table><thead><tr><th>Peça</th><th>Qtd.</th></tr></thead><tbody>
-      ${parts.length? parts.map(p=>`<tr><td>${p.name||'—'}</td><td>${p.qty||1}</td></tr>`).join('') : '<tr><td colspan="2">Nenhuma peça registada.</td></tr>'}
+      ${parts.length? parts.map(p=>`<tr><td>${esc(p.name)||'—'}</td><td>${p.qty||1}</td></tr>`).join('') : '<tr><td colspan="2">Nenhuma peça registada.</td></tr>'}
     </tbody></table>
 
     <div class="grid2">
-      <div><label>Mecânico Responsável</label><div>${v.mechanic || '—'}</div></div>
+      <div><label>Mecânico Responsável</label><div>${esc(v.mechanic)||'—'}</div></div>
       <div><label>Próxima Revisão Recomendada</label><div>${v.nextServiceDate? fmtDate(v.nextServiceDate) : (v.nextServiceKm? v.nextServiceKm+' km' : '—')}</div></div>
     </div>
 
     ${(v.notes && v.notes.length) ? `<div class="section-title">Notas da Equipa</div>
-      ${v.notes.map(n=>`<div style="font-size:13px;margin-bottom:6px;">• ${n.text} <span style="color:var(--text-dim);">(${n.author}, ${fmtDate(n.date)})</span></div>`).join('')}` : ''}
+      ${v.notes.map(n=>`<div style="font-size:13px;margin-bottom:6px;">• ${esc(n.text)} <span style="color:var(--text-dim);">(${esc(n.author)}, ${fmtDate(n.date)})</span></div>`).join('')}` : ''}
 
     ${allPhotos.length ? `<div class="section-title">Registo Fotográfico</div>
       <div class="photo-thumbs">${allPhotos.map(p=>`<div class="photo-item"><img src="${p.url}" style="width:100px;height:100px;"><div class="photo-cap">${p.label}</div></div>`).join('')}</div>` : ''}
