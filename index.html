@@ -372,6 +372,10 @@ function subscribeVehicles(){
 }
 
 async function saveVehicle(v){
+  if(docSize(v) > MAX_DOC_BYTES){
+    toast('Dados demasiado grandes (fotos a mais). Remova fotos.');
+    throw new Error('doc-too-large');
+  }
   if(FIREBASE_OK){
     if(v.id){
       const id = v.id; const copy = {...v}; delete copy.id;
@@ -773,6 +777,53 @@ function calcTotals(v){
   const labor = Number(v.laborCost)||0;
   return {services, parts, labor, total: services+parts+labor};
 }
+/* Comprime fotos (telemóveis geram 3–10 MB; o Firebase só aceita ~1 MB por viatura) */
+function compressImage(file, maxSide=800, quality=0.6){
+  return new Promise((resolve, reject)=>{
+    const fr = new FileReader();
+    fr.onerror = ()=>reject(new Error('Não foi possível ler a foto'));
+    fr.onload = ()=>{
+      const img = new Image();
+      img.onerror = ()=>reject(new Error('Foto inválida'));
+      img.onload = ()=>{
+        let w = img.naturalWidth, h = img.naturalHeight;
+        const k = Math.min(1, maxSide/Math.max(w,h));
+        w = Math.round(w*k); h = Math.round(h*k);
+        const c = document.createElement('canvas'); c.width = w; c.height = h;
+        const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(img,0,0,w,h);
+        resolve(c.toDataURL('image/jpeg', quality));
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+/* Imprime só o documento (num iframe leve), em vez da app inteira — muito mais rápido no telemóvel */
+function printDocument(overlay, title){
+  const modal = overlay.querySelector('.modal').cloneNode(true);
+  modal.querySelectorAll('.no-print').forEach(n=>n.remove());
+  const css = Array.from(document.querySelectorAll('style')).map(x=>x.textContent).join('\n');
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument;
+  doc.open();
+  doc.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'\nbody{background:#fff;color:#000;min-height:0;}.modal{border:none;max-width:100%;padding:0;border-radius:0;box-shadow:none;}</style></head><body></body></html>');
+  doc.close();
+  doc.body.appendChild(doc.importNode(modal, true));
+  const imgs = Array.from(doc.images);
+  const ready = Promise.all(imgs.map(im=> im.complete ? Promise.resolve() : new Promise(r=>{ im.onload = im.onerror = r; })));
+  ready.then(()=>{
+    setTimeout(()=>{
+      try{ iframe.contentWindow.focus(); iframe.contentWindow.print(); }catch(e){ window.print(); }
+      setTimeout(()=>iframe.remove(), 60000);
+    }, 50);
+  });
+}
+const MAX_DOC_BYTES = 900000;
+function docSize(o){ try{ return JSON.stringify(o).length; }catch(e){ return 0; } }
+const SHOP = {name:'D.E.MOTORS', nif:'5001259431'};
+const shopHeader = ()=>`<div style="font-size:13px;margin-bottom:14px;"><b>${SHOP.name}</b> · NIF: ${SHOP.nif}</div>`;
 function esc(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function isOwner(){ return !!currentUser && currentUser.role==='admin'; }
 function canSeePrices(){ return !!currentUser && (currentUser.role==='admin' || currentUser.role==='recepcao'); }
@@ -899,18 +950,15 @@ function renderIntakeForm(main, existing){
     document.getElementById('photo-preview').innerHTML = pendingPhotos.map(p=>`<img src="${p}">`).join('');
   }
   renderPhotoPreview();
-  document.getElementById('f-photos').addEventListener('change', (e)=>{
-    const files = Array.from(e.target.files).slice(0,6);
-    let loaded=0;
-    files.forEach(file=>{
-      const reader = new FileReader();
-      reader.onload = ()=>{
-        pendingPhotos.push(reader.result);
-        loaded++;
-        if(loaded===files.length) renderPhotoPreview();
-      };
-      reader.readAsDataURL(file);
-    });
+  document.getElementById('f-photos').addEventListener('change', async (e)=>{
+    const files = Array.from(e.target.files).slice(0, Math.max(0, 6 - pendingPhotos.length));
+    if(!files.length){ toast('Máximo de 6 fotos de entrada'); return; }
+    toast('A processar fotos…');
+    for(const file of files){
+      try{ pendingPhotos.push(await compressImage(file)); }catch(err){ toast(err.message); }
+    }
+    e.target.value = '';
+    renderPhotoPreview();
   });
 
   document.getElementById('cancel-intake-btn').addEventListener('click', ()=>{ currentView='dashboard'; render(); });
@@ -1439,20 +1487,15 @@ function openVehicleModal(id){
   let pendingProgressPhotos = v.progressPhotos ? [...v.progressPhotos] : [];
   const progInput = document.getElementById('m-progress-photo');
   if(progInput){
-    progInput.addEventListener('change', (e)=>{
-      const files = Array.from(e.target.files).slice(0,6);
-      let loaded=0;
-      files.forEach(file=>{
-        const reader = new FileReader();
-        reader.onload = ()=>{
-          pendingProgressPhotos.push({url:reader.result, date:Date.now()});
-          loaded++;
-          if(loaded===files.length){
-            document.getElementById('progress-photo-thumbs').innerHTML = pendingProgressPhotos.map(p=>`<div class="photo-item"><img src="${p.url}"><div class="photo-cap">${fmtDate(p.date)}</div></div>`).join('');
-          }
-        };
-        reader.readAsDataURL(file);
-      });
+    progInput.addEventListener('change', async (e)=>{
+      const files = Array.from(e.target.files).slice(0, Math.max(0, 8 - pendingProgressPhotos.length));
+      if(!files.length){ toast('Máximo de 8 fotos de progresso'); return; }
+      toast('A processar fotos…');
+      for(const file of files){
+        try{ pendingProgressPhotos.push({url: await compressImage(file), date:Date.now()}); }catch(err){ toast(err.message); }
+      }
+      e.target.value = '';
+      document.getElementById('progress-photo-thumbs').innerHTML = pendingProgressPhotos.map(p=>`<div class="photo-item"><img src="${p.url}"><div class="photo-cap">${fmtDate(p.date)}</div></div>`).join('');
     });
   }
 
@@ -1574,10 +1617,11 @@ function openInvoice(v, services, parts, labor, mode, pay){
   overlay.className='modal-overlay';
   overlay.innerHTML = `<div class="modal">
     <div class="no-print" style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px;">
-      <button class="btn small" onclick="window.print()">Imprimir</button>
+      <button class="btn small print-doc">Exportar PDF</button>
       <button class="btn small secondary close-inv">Fechar</button>
     </div>
-    <img src="${document.querySelector('.top-logo').src}" alt="DE.MOTORS" style="height:34px;width:auto;display:block;margin-bottom:14px;">
+    <img src="${document.querySelector('.top-logo').src}" alt="DE.MOTORS" style="height:34px;width:auto;display:block;margin-bottom:8px;">
+    ${shopHeader()}
     <h1 style="color:var(--orange);">${isPro ? 'FATURA PROFORMA' : 'FATURA'}</h1>
     <div style="color:var(--text-dim);font-size:13px;margin-bottom:20px;">Nº ${docNo} · Data: ${now.toLocaleDateString('pt-PT')}${isPro ? ' · Válida até ' + validUntil : ''}</div>
     <div class="grid2">
@@ -1613,6 +1657,7 @@ function openInvoice(v, services, parts, labor, mode, pay){
   </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('.close-inv').addEventListener('click', ()=>overlay.remove());
+  overlay.querySelector('.print-doc').addEventListener('click', ()=>printDocument(overlay, docNo));
 }
 
 /* ===================== Maintenance Report ===================== */
@@ -1626,9 +1671,11 @@ function openMaintenanceReport(v, services, parts, progressPhotos){
   overlay.className='modal-overlay';
   overlay.innerHTML = `<div class="modal">
     <div class="no-print" style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px;">
-      <button class="btn small" onclick="window.print()">Imprimir / Guardar como PDF</button>
+      <button class="btn small print-doc">Exportar PDF</button>
       <button class="btn small secondary close-rep">Fechar</button>
     </div>
+    <img src="${document.querySelector('.top-logo').src}" alt="DE.MOTORS" style="height:34px;width:auto;display:block;margin-bottom:8px;">
+    ${shopHeader()}
     <h1 style="color:var(--orange);">RELATÓRIO DE MANUTENÇÃO</h1>
     <div style="color:var(--text-dim);text-transform:none;font-size:13px;margin-bottom:20px;">Emitido em: ${new Date().toLocaleDateString('pt-PT')}</div>
 
@@ -1678,7 +1725,15 @@ function openMaintenanceReport(v, services, parts, progressPhotos){
   </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('.close-rep').addEventListener('click', ()=>overlay.remove());
+  overlay.querySelector('.print-doc').addEventListener('click', ()=>printDocument(overlay, 'Relatorio-' + String(v.plate||'').toUpperCase().replace(/[^A-Z0-9]/g,'')));
 }
+
+window.addEventListener('unhandledrejection', e=>{
+  const r = e.reason || {};
+  if(r.message === 'doc-too-large') return;
+  console.error(r);
+  toast('Erro ao guardar: ' + (r.code || r.message || 'tente novamente'));
+});
 
 /* ===================== Boot ===================== */
 subscribeUsers();
