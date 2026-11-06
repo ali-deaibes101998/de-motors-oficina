@@ -2,12 +2,12 @@
 <html lang="pt">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Gestão de Oficina — DE.MOTORS</title>
-<meta name="theme-color" content="#2C50A4">
+<meta name="theme-color" content="#1e3a8a">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="DE.MOTORS">
 <link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
@@ -176,7 +176,7 @@ th{color:var(--text-dim);font-size:11px;text-transform:uppercase;font-weight:600
 .photo-thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
 .photo-thumbs img{width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border);}
 .close-x{background:none;color:var(--text-dim);font-size:22px;padding:0 6px;}
-.modal-overlay{position:fixed;inset:0;background:rgba(28,25,23,.55);display:flex;align-items:flex-start;justify-content:center;padding:max(16px,env(safe-area-inset-top)) 10px 24px;overflow-y:auto;z-index:50;}
+.modal-overlay{position:fixed;inset:0;background:rgba(28,25,23,.55);display:flex;align-items:flex-start;justify-content:center;padding:max(16px,env(safe-area-inset-top)) 10px 120px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;z-index:50;}
 .modal{background:#fff;border:1px solid var(--border);border-radius:16px;max-width:720px;width:100%;padding:18px;}
 .modal-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}
 .totals-box{background:#fafaf9;border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-top:10px;}
@@ -211,7 +211,7 @@ th{color:var(--text-dim);font-size:11px;text-transform:uppercase;font-weight:600
 .stock-row.nocost{grid-template-columns:minmax(0,1fr) 80px 80px 28px;}
 .stock-row.nocost .mini.cost,.stock-row.nocost>span.cost{display:none;}
 @media (max-width:700px){.stock-row.nocost{grid-template-columns:1fr 1fr 28px;}}
-input[readonly].ro{background:#f5f5f4;color:#78716c;}
+input[readonly].ro,textarea[readonly].ro{background:#f5f5f4;color:#78716c;}
 .row-item input{padding:9px 8px;}
 .stock-row{grid-template-columns:minmax(0,1fr) 80px 80px 110px 28px;}
 .mini{margin:0;display:block;}
@@ -321,6 +321,7 @@ try{
   } else {
     firebase.initializeApp(firebaseConfig);
     db = firebase.firestore();
+    try{ db.enablePersistence({synchronizeTabs:true}).catch(function(){}); }catch(e){}
     auth = firebase.auth();
     authReady = new Promise(res=>{ const un = auth.onAuthStateChanged(u=>{ un(); res(u); }); });
     FIREBASE_OK = true;
@@ -377,6 +378,9 @@ function subscribeVehicles(){
   }
 }
 
+function withSaveTimeout(p){
+  return Promise.race([p, new Promise(r=>setTimeout(()=>{ toast('Sem ligação estável — guardado no telemóvel, sincroniza quando houver internet'); r(null); }, 10000))]);
+}
 async function saveVehicle(v){
   if(docSize(v) > MAX_DOC_BYTES){
     toast('Dados demasiado grandes (fotos a mais). Remova fotos.');
@@ -385,12 +389,12 @@ async function saveVehicle(v){
   if(FIREBASE_OK){
     if(v.id){
       const id = v.id; const copy = {...v}; delete copy.id;
-      await db.collection('vehicles').doc(id).set(copy, {merge:true});
+      await withSaveTimeout(db.collection('vehicles').doc(id).set(copy, {merge:true}));
       return id;
     } else {
       v.createdAt = Date.now();
-      const ref = await db.collection('vehicles').add(v);
-      return ref.id;
+      const ref = await withSaveTimeout(db.collection('vehicles').add(v));
+      return ref ? ref.id : null;
     }
   } else {
     if(v.id){
@@ -904,6 +908,7 @@ function renderDashboard(main){
 
 /* ===================== Intake Form ===================== */
 function renderIntakeForm(main, existing){
+  if(existing && !isOwner()){ toast('Apenas o dono pode editar'); return; }
   const v = existing || {plate:'',make:'',model:'',year:'',color:'',vin:'',mileage:'',
     ownerName:'',ownerPhone:'',ownerDoc:'',dateIn:new Date().toISOString().slice(0,10),
     expectedDate:'', reason:'', diagnosis:'', status:'waiting-diag',
@@ -1079,13 +1084,14 @@ function renderVehiclesList(main){
 /* ===================== Inventory (Estoque) ===================== */
 function renderInventory(main){
   main.innerHTML = `
-    <div class="pagehead"><h2>Estoque de Peças</h2><button class="btn" id="add-inv-btn">+ Nova Peça</button></div>
+    <div class="pagehead"><h2>Estoque de Peças</h2>${isOwner()?'<button class="btn" id="add-inv-btn">+ Nova Peça</button>':''}</div>
     <div class="panel">
       <div class="stock-row header ${isOwner()?'':'nocost'}"><span>Peça</span><span>Qtd.</span><span>Mín.</span><span class="cost">Custo Unit.</span><span></span></div>
       <div id="inv-rows"></div>
     </div>
   `;
-  document.getElementById('add-inv-btn').addEventListener('click', ()=>{
+  const _addInv = document.getElementById('add-inv-btn');
+  if(_addInv) _addInv.addEventListener('click', ()=>{
     saveInventoryItem({name:'Nova peça', qty:0, minQty:1, cost:0}).then(()=>renderInventory(main));
   });
   renderInvRows();
@@ -1096,9 +1102,9 @@ function renderInventory(main){
     wrap.innerHTML = inventory.map(i=>{
       const low = Number(i.qty) <= Number(i.minQty||0);
       return `<div class="stock-row ${low?'low':''} ${isOwner()?'':'nocost'}" data-id="${i.id}">
-        <input class="inv-name" placeholder="Nome da peça" value="${esc(i.name)}">
-        <label class="mini"><span>Qtd.</span><input class="inv-qty" type="number" value="${i.qty||0}"></label>
-        <label class="mini"><span>Mín.</span><input class="inv-min" type="number" value="${i.minQty||0}"></label>
+        <input class="inv-name ${isOwner()?'':'ro'}" placeholder="Nome da peça" value="${esc(i.name)}" ${isOwner()?'':'readonly'}>
+        <label class="mini"><span>Qtd.</span><input class="inv-qty ${isOwner()?'':'ro'}" type="number" value="${i.qty||0}" ${isOwner()?'':'readonly'}></label>
+        <label class="mini"><span>Mín.</span><input class="inv-min ${isOwner()?'':'ro'}" type="number" value="${i.minQty||0}" ${isOwner()?'':'readonly'}></label>
         <label class="mini cost"><span>Custo unit.</span><input class="inv-cost" type="number" value="${i.cost||0}"></label>
         ${isOwner() ? `<button class="close-x inv-del" style="font-size:18px;">&times;</button>` : '<span></span>'}
       </div>`;
@@ -1107,6 +1113,7 @@ function renderInventory(main){
       const id = row.dataset.id;
       const item = inventory.find(x=>x.id===id);
       const commit = ()=>{
+        if(!isOwner()) return;
         saveInventoryItem({
           id,
           name: row.querySelector('.inv-name').value,
@@ -1358,7 +1365,7 @@ function openVehicleModal(id){
     </select>
 
     <div class="section-title">Observações do Diagnóstico</div>
-    <textarea id="m-diagnosis" rows="2">${esc(v.diagnosis)}</textarea>
+    <textarea id="m-diagnosis" rows="2" ${(!isOwner()&&v.diagnosis)?'readonly class="ro"':''}>${esc(v.diagnosis)}</textarea>
 
     <div class="section-title">Diagnóstico / Mão de Obra</div>
     <div id="services-rows"></div>
@@ -1425,7 +1432,7 @@ function openVehicleModal(id){
       ${canSeePrices() ? `<button class="btn secondary" id="proforma-btn">Proforma (Orçamento)</button>
       <button class="btn secondary" id="invoice-btn">Ver Fatura / Exportar PDF</button>` : ''}
       <button class="btn secondary" id="report-btn">Relatório de Manutenção (PDF)</button>
-      <button class="btn secondary" id="edit-full-btn">Editar Dados da Viatura</button>
+      ${isOwner() ? `<button class="btn secondary" id="edit-full-btn">Editar Dados da Viatura</button>` : ''}
       ${isOwner() ? `<button class="btn danger" id="delete-btn">Eliminar</button>` : ''}
     </div>
   </div>`;
@@ -1437,7 +1444,7 @@ function openVehicleModal(id){
   function renderServiceRows(){
     document.getElementById('services-rows').innerHTML = services.map((s,i)=>`
       <div class="row-item svc ${canSeePrices()?'':'nocost'}">
-        <input data-i="${i}" class="svc-desc" placeholder="Descrição" value="${esc(s.desc)}">
+        <input data-i="${i}" class="svc-desc ${(!isOwner()&&!s._new&&(s.desc||s.cost))?'ro':''}" placeholder="Descrição" value="${esc(s.desc)}" ${(!isOwner()&&!s._new&&(s.desc||s.cost))?'readonly':''}>
         ${canSeePrices() ? `<input data-i="${i}" class="svc-cost ${isOwner()?'':'ro'}" type="number" placeholder="Custo" value="${s.cost||0}" ${isOwner()?'':'readonly'}>` : ''}
         ${isOwner() || !(s.desc||s.cost) || s._new ? `<button data-i="${i}" class="close-x svc-del" style="font-size:18px;">&times;</button>` : '<span></span>'}
       </div>`).join('');
@@ -1448,8 +1455,8 @@ function openVehicleModal(id){
   function renderPartRows(){
     document.getElementById('parts-rows').innerHTML = parts.map((p,i)=>`
       <div class="row-item prt ${canSeePrices()?'':'nocost'}">
-        <input data-i="${i}" class="prt-name" placeholder="Nome da peça" value="${esc(p.name)}">
-        <input data-i="${i}" class="prt-qty" type="number" placeholder="Qtd" value="${p.qty||1}">
+        <input data-i="${i}" class="prt-name ${(!isOwner()&&!p._new)?'ro':''}" placeholder="Nome da peça" value="${esc(p.name)}" ${(!isOwner()&&!p._new)?'readonly':''}>
+        <input data-i="${i}" class="prt-qty ${(!isOwner()&&!p._new)?'ro':''}" type="number" placeholder="Qtd" value="${p.qty||1}" ${(!isOwner()&&!p._new)?'readonly':''}>
         ${canSeePrices() ? `<input data-i="${i}" class="prt-cost ${isOwner()?'':'ro'}" type="number" placeholder="Custo unit." value="${p.cost||0}" ${isOwner()?'':'readonly'}>` : ''}
         ${isOwner() || p._new ? `<button data-i="${i}" class="close-x prt-del" style="font-size:18px;">&times;</button>` : '<span></span>'}
       </div>`).join('');
@@ -1486,8 +1493,14 @@ function openVehicleModal(id){
   document.getElementById('add-service').addEventListener('click', ()=>{services.push({desc:'',cost:0,_new:true}); renderServiceRows();});
   document.getElementById('add-part').addEventListener('click', ()=>{parts.push({name:'',qty:1,cost:0,_new:true}); renderPartRows();});
 
-  overlay.querySelector('.close-x').addEventListener('click', ()=>overlay.remove());
-  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) overlay.remove(); });
+  function tryClose(){
+    let dirty=false; try{ dirty = (typeof snap0==='string') && JSON.stringify(collectVehicle())!==snap0; }catch(e){}
+    if(!dirty){ overlay.remove(); return; }
+    if(confirm('Tem alterações por guardar.\n\nOK = Guardar e sair\nCancelar = outras opções')){ doSave(true); return; }
+    if(confirm('Sair SEM guardar? As alterações serão perdidas.\n\nOK = Sair sem guardar\nCancelar = Continuar a editar')) overlay.remove();
+  }
+  overlay.querySelector('.close-x').addEventListener('click', tryClose);
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) tryClose(); });
 
   /* ---- Progress photos ---- */
   let pendingProgressPhotos = v.progressPhotos ? [...v.progressPhotos] : [];
@@ -1557,13 +1570,13 @@ function openVehicleModal(id){
     overlay.remove(); openVehicleModal(id);
   });
 
-  document.getElementById('save-modal-btn').addEventListener('click', async ()=>{
+  function collectVehicle(){
     const newNextServiceDate = document.getElementById('m-next-service').value;
-    const updated = {
+    return {
       ...v,
       status: document.getElementById('m-status').value,
       diagnosis: document.getElementById('m-diagnosis').value,
-      services: services.map(({_new, ...x})=>x), parts: parts.map(({_new, ...x})=>x),
+      services: services.filter(x=>(x.desc||'').trim()||Number(x.cost)).map(({_new, ...x})=>x), parts: parts.filter(x=>(x.name||'').trim()||Number(x.cost)).map(({_new, ...x})=>x),
       laborCost: _lab ? _lab.value : (v.laborCost||0),
       mechanic: document.getElementById('m-mechanic').value,
       paymentStatus: _ps ? _ps.value : (v.paymentStatus||'pending'),
@@ -1574,13 +1587,35 @@ function openVehicleModal(id){
       nextServiceKm: document.getElementById('m-next-service-km').value,
       reminderDone: newNextServiceDate !== v.nextServiceDate ? false : (v.reminderDone||false),
     };
-    await saveVehicle(updated);
-    updateRemindersBadge();
-    toast('Guardado');
-    overlay.remove();
-  });
+  }
+  let snap0 = JSON.stringify(collectVehicle());
+  let saving = false;
+  async function doSave(closeAfter){
+    if(saving) return false;
+    saving = true;
+    const btn = document.getElementById('save-modal-btn');
+    if(btn){ btn.disabled = true; btn.textContent = 'A guardar…'; }
+    try{
+      const updated = collectVehicle();
+      await saveVehicle(updated);
+      snap0 = JSON.stringify(updated);
+      updateRemindersBadge();
+      toast('Guardado');
+      if(closeAfter) overlay.remove();
+      return true;
+    }catch(err){
+      console.error(err);
+      if(err.message!=='doc-too-large') toast('Erro ao guardar: ' + (err.code||err.message));
+      return false;
+    }finally{
+      saving = false;
+      if(btn){ btn.disabled = false; btn.textContent = 'Guardar'; }
+    }
+  }
+  document.getElementById('save-modal-btn').addEventListener('click', ()=>doSave(true));
 
-  document.getElementById('edit-full-btn').addEventListener('click', ()=>{
+  const _efb = document.getElementById('edit-full-btn');
+  if(_efb) _efb.addEventListener('click', ()=>{
     overlay.remove();
     currentView='intake-edit';
     document.getElementById('main').innerHTML='';
@@ -1599,8 +1634,13 @@ function openVehicleModal(id){
 
   const _pf = document.getElementById('proforma-btn'), _inv = document.getElementById('invoice-btn');
   const curPay = ()=>({status: _ps ? _ps.value : (v.paymentStatus||'pending'), paid: Number((document.getElementById('m-paid-amount')||{}).value)||0, method: (document.getElementById('m-payment-method')||{}).value||''});
-  if(_pf) _pf.addEventListener('click', ()=>{ openInvoice(v, services, parts, _lab.value, 'proforma', curPay()); });
-  if(_inv) _inv.addEventListener('click', ()=>{ openInvoice(v, services, parts, _lab.value, 'invoice', curPay()); });
+  async function saveThenOpen(mode){
+    let dirty=false; try{ dirty = JSON.stringify(collectVehicle())!==snap0; }catch(e){}
+    if(dirty) await doSave(false);
+    openInvoice(v, services.filter(x=>(x.desc||'').trim()||Number(x.cost)), parts.filter(x=>(x.name||'').trim()||Number(x.cost)), _lab ? _lab.value : (v.laborCost||0), mode, curPay());
+  }
+  if(_pf) _pf.addEventListener('click', ()=>saveThenOpen('proforma'));
+  if(_inv) _inv.addEventListener('click', ()=>saveThenOpen('invoice'));
   document.getElementById('report-btn').addEventListener('click', ()=>{
     openMaintenanceReport(v, services, parts, pendingProgressPhotos);
   });
@@ -1745,5 +1785,6 @@ window.addEventListener('unhandledrejection', e=>{
 subscribeUsers();
 </script>
 <script>document.addEventListener('contextmenu',function(e){var t=e.target;if(!(t&&t.closest&&t.closest('input,textarea,select,[contenteditable]')))e.preventDefault();});document.addEventListener('selectstart',function(e){var t=e.target&&e.target.nodeType===1?e.target:e.target.parentElement;if(!(t&&t.closest&&t.closest('input,textarea,select,[contenteditable]')))e.preventDefault();});</script>
+<script>document.addEventListener('focusin',function(e){var t=e.target;if(t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)){setTimeout(function(){try{t.scrollIntoView({block:'center',behavior:'smooth'});}catch(_){}},350);}});</script>
 </body>
 </html>
