@@ -285,7 +285,7 @@ input[readonly].ro,textarea[readonly].ro{background:#f5f5f4;color:#78716c;}
       </div>
     </div>
     <div id="main"></div>
-    <div style="text-align:center;font-size:11px;color:#a8a29e;padding:4px 0 8px;">Versão 06/11/2026 · v4</div>
+    <div style="text-align:center;font-size:11px;color:#a8a29e;padding:4px 0 8px;">Versão 06/11/2026 · v5</div>
   </div>
 </div>
 
@@ -383,6 +383,7 @@ function withSaveTimeout(p){
   return Promise.race([p, new Promise(r=>setTimeout(()=>{ toast('Sem ligação estável — guardado no telemóvel, sincroniza quando houver internet'); r(null); }, 10000))]);
 }
 async function saveVehicle(v){
+  if(v.id && !isOwner()){ toast('Apenas o dono pode editar'); throw new Error('not-owner'); }
   if(docSize(v) > MAX_DOC_BYTES){
     toast('Dados demasiado grandes (fotos a mais). Remova fotos.');
     throw new Error('doc-too-large');
@@ -1145,7 +1146,7 @@ function renderReminders(main){
             <b>${esc(v.plate)} — ${esc(v.make)} ${esc(v.model)}</b>
             <span>${esc(v.ownerName)||'—'} · ${esc(v.ownerPhone)||'—'} · Revisão prevista: ${fmtDate(v.nextServiceDate)}${overdue?' (atrasada)':''}</span>
           </div>
-          <button class="btn small secondary mark-contacted">Marcar como contactado</button>
+          ${isOwner() ? '<button class="btn small secondary mark-contacted">Marcar como contactado</button>' : ''}
         </div>`;
       }).join('') : '<div class="empty-state">Sem lembretes pendentes nos próximos 30 dias.</div>'}
     </div>
@@ -1606,7 +1607,7 @@ function openVehicleModal(id){
       return true;
     }catch(err){
       console.error(err);
-      if(err.message!=='doc-too-large') toast('Erro ao guardar: ' + (err.code||err.message));
+      if(err.message!=='doc-too-large' && err.message!=='not-owner') toast('Erro ao guardar: ' + (err.code||err.message));
       return false;
     }finally{
       saving = false;
@@ -1645,6 +1646,18 @@ function openVehicleModal(id){
   document.getElementById('report-btn').addEventListener('click', ()=>{
     openMaintenanceReport(v, services, parts, pendingProgressPhotos);
   });
+
+  /* Só o dono pode editar ou eliminar: os outros utilizadores só consultam. */
+  if(!isOwner()){
+    overlay.querySelectorAll('input,select,textarea').forEach(el=>{ el.disabled = true; });
+    ['save-modal-btn','add-service','add-part','add-note-btn','clear-sig-btn','save-sig-btn','redo-sig-btn','edit-full-btn','delete-btn','m-progress-photo'].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display='none'; });
+    overlay.querySelectorAll('.svc-del,.prt-del,.sig-wrap').forEach(e=>{ e.style.display='none'; });
+    const note = document.createElement('div');
+    note.className = 'no-print';
+    note.style.cssText = 'background:#fef3c7;color:#78350f;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600;margin:8px 0;';
+    note.textContent = 'Só o dono pode editar ou eliminar. Aqui só pode consultar.';
+    const head = overlay.querySelector('.modal-head'); if(head) head.insertAdjacentElement('afterend', note);
+  }
 }
 
 /* ===================== Invoice ===================== */
@@ -1777,7 +1790,7 @@ function openMaintenanceReport(v, services, parts, progressPhotos){
 
 window.addEventListener('unhandledrejection', e=>{
   const r = e.reason || {};
-  if(r.message === 'doc-too-large') return;
+  if(r.message === 'doc-too-large' || r.message === 'not-owner') return;
   console.error(r);
   toast('Erro ao guardar: ' + (r.code || r.message || 'tente novamente'));
 });
@@ -1789,7 +1802,7 @@ subscribeUsers();
 <script>document.addEventListener('focusin',function(e){var t=e.target;if(t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)){setTimeout(function(){try{t.scrollIntoView({block:'center',behavior:'smooth'});}catch(_){}},350);}});</script>
 <script>
 /* ===== Aviso de nova versão ===== */
-const APP_VERSION = '2026-11-06-v4';
+const APP_VERSION = '2026-11-06-v5';
 (function(){
   var bar = null;
   function show(){
