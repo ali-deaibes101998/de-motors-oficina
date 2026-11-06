@@ -285,7 +285,7 @@ input[readonly].ro,textarea[readonly].ro{background:#f5f5f4;color:#78716c;}
       </div>
     </div>
     <div id="main"></div>
-    <div style="text-align:center;font-size:11px;color:#a8a29e;padding:4px 0 8px;">Versão 06/11/2026 · v5</div>
+    <div style="text-align:center;font-size:11px;color:#a8a29e;padding:4px 0 8px;">Versão 06/11/2026 · v6</div>
   </div>
 </div>
 
@@ -383,7 +383,11 @@ function withSaveTimeout(p){
   return Promise.race([p, new Promise(r=>setTimeout(()=>{ toast('Sem ligação estável — guardado no telemóvel, sincroniza quando houver internet'); r(null); }, 10000))]);
 }
 async function saveVehicle(v){
-  if(v.id && !isOwner()){ toast('Apenas o dono pode editar'); throw new Error('not-owner'); }
+  if(v.id && !isOwner()){
+    const old = vehicles.find(x=>x.id===v.id);
+    const onlyStatus = currentUser && currentUser.role==='mecanico' && old && JSON.stringify({...old,status:0})===JSON.stringify({...v,status:0});
+    if(!onlyStatus){ toast('Apenas o dono pode editar'); throw new Error('not-owner'); }
+  }
   if(docSize(v) > MAX_DOC_BYTES){
     toast('Dados demasiado grandes (fotos a mais). Remova fotos.');
     throw new Error('doc-too-large');
@@ -1650,13 +1654,26 @@ function openVehicleModal(id){
   /* Só o dono pode editar ou eliminar: os outros utilizadores só consultam. */
   if(!isOwner()){
     overlay.querySelectorAll('input,select,textarea').forEach(el=>{ el.disabled = true; });
+    const _canStatus = currentUser && currentUser.role==='mecanico';
+    if(_canStatus){ const st=document.getElementById('m-status'); if(st) st.disabled=false; }
     ['save-modal-btn','add-service','add-part','add-note-btn','clear-sig-btn','save-sig-btn','redo-sig-btn','edit-full-btn','delete-btn','m-progress-photo'].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display='none'; });
     overlay.querySelectorAll('.svc-del,.prt-del,.sig-wrap').forEach(e=>{ e.style.display='none'; });
     const note = document.createElement('div');
     note.className = 'no-print';
     note.style.cssText = 'background:#fef3c7;color:#78350f;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600;margin:8px 0;';
-    note.textContent = 'Só o dono pode editar ou eliminar. Aqui só pode consultar.';
+    note.textContent = _canStatus ? 'Só o dono pode editar ou eliminar. Pode apenas mudar o estado da viatura.' : 'Só o dono pode editar ou eliminar. Aqui só pode consultar.';
     const head = overlay.querySelector('.modal-head'); if(head) head.insertAdjacentElement('afterend', note);
+    if(_canStatus){
+      const st = document.getElementById('m-status');
+      const b = document.createElement('button');
+      b.className='btn small no-print'; b.textContent='Guardar estado'; b.style.marginTop='8px';
+      b.addEventListener('click', async ()=>{
+        b.disabled=true;
+        try{ await saveVehicle({...v, status: st.value}); toast('Estado guardado'); overlay.remove(); }
+        catch(err){ b.disabled=false; if(err.message!=='not-owner') toast('Erro ao guardar: '+(err.code||err.message)); }
+      });
+      st.insertAdjacentElement('afterend', b);
+    }
   }
 }
 
@@ -1802,7 +1819,7 @@ subscribeUsers();
 <script>document.addEventListener('focusin',function(e){var t=e.target;if(t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)){setTimeout(function(){try{t.scrollIntoView({block:'center',behavior:'smooth'});}catch(_){}},350);}});</script>
 <script>
 /* ===== Aviso de nova versão ===== */
-const APP_VERSION = '2026-11-06-v5';
+const APP_VERSION = '2026-11-06-v6';
 (function(){
   var bar = null;
   function show(){
