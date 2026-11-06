@@ -285,7 +285,7 @@ input[readonly].ro,textarea[readonly].ro{background:#f5f5f4;color:#78716c;}
       </div>
     </div>
     <div id="main"></div>
-    <div style="text-align:center;font-size:11px;color:#a8a29e;padding:4px 0 8px;">Versão 06/11/2026 · v3</div>
+    <div style="text-align:center;font-size:11px;color:#a8a29e;padding:4px 0 8px;">Versão 06/11/2026 · v4</div>
   </div>
 </div>
 
@@ -1787,5 +1787,35 @@ subscribeUsers();
 </script>
 <script>document.addEventListener('contextmenu',function(e){var t=e.target;if(!(t&&t.closest&&t.closest('input,textarea,select,[contenteditable]')))e.preventDefault();});document.addEventListener('selectstart',function(e){var t=e.target&&e.target.nodeType===1?e.target:e.target.parentElement;if(!(t&&t.closest&&t.closest('input,textarea,select,[contenteditable]')))e.preventDefault();});</script>
 <script>document.addEventListener('focusin',function(e){var t=e.target;if(t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)){setTimeout(function(){try{t.scrollIntoView({block:'center',behavior:'smooth'});}catch(_){}},350);}});</script>
+<script>
+/* ===== Aviso de nova versão ===== */
+const APP_VERSION = '2026-11-06-v4';
+(function(){
+  var bar = null;
+  function show(){
+    if(bar) return;
+    bar = document.createElement('div');
+    bar.id = 'update-bar';
+    bar.setAttribute('style','position:fixed;left:0;right:0;top:0;z-index:2000;background:#f59e0b;color:#1c1917;font-weight:700;font-size:14px;text-align:center;padding:max(env(safe-area-inset-top),8px) 12px 8px;cursor:pointer;');
+    bar.textContent = 'Nova versão disponível — toque aqui para atualizar';
+    bar.addEventListener('click', function(){
+      try{ if(window.caches) caches.keys().then(function(k){ k.forEach(function(n){ caches.delete(n); }); }); }catch(e){}
+      location.href = location.pathname + '?v=' + Date.now();
+    });
+    document.body.appendChild(bar);
+  }
+  function check(){
+    try{
+      fetch(location.pathname + '?chk=' + Date.now(), {cache:'no-store'}).then(function(r){ return r.text(); }).then(function(t){
+        var m = t.match(/const APP_VERSION = '([^']+)'/);
+        if(m && m[1] !== APP_VERSION) show();
+      }).catch(function(){});
+    }catch(e){}
+  }
+  window.addEventListener('load', function(){ setTimeout(check, 2500); });
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden) check(); });
+  setInterval(check, 5*60*1000);
+})();
+</script>
 </body>
 </html>
