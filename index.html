@@ -285,7 +285,7 @@ input[readonly].ro,textarea[readonly].ro{background:#f5f5f4;color:#78716c;}
       </div>
     </div>
     <div id="main"></div>
-    <div style="text-align:center;font-size:11px;color:#a8a29e;padding:4px 0 8px;">Versão 06/11/2026 · v6</div>
+    <div style="text-align:center;font-size:11px;color:#a8a29e;padding:4px 0 8px;">Versão 07/11/2026 · v7</div>
   </div>
 </div>
 
@@ -383,10 +383,10 @@ function withSaveTimeout(p){
   return Promise.race([p, new Promise(r=>setTimeout(()=>{ toast('Sem ligação estável — guardado no telemóvel, sincroniza quando houver internet'); r(null); }, 10000))]);
 }
 async function saveVehicle(v){
-  if(v.id && !isOwner()){
+  if(v.id && !canEdit()){
     const old = vehicles.find(x=>x.id===v.id);
     const onlyStatus = currentUser && currentUser.role==='mecanico' && old && JSON.stringify({...old,status:0})===JSON.stringify({...v,status:0});
-    if(!onlyStatus){ toast('Apenas o dono pode editar'); throw new Error('not-owner'); }
+    if(!onlyStatus){ toast('Sem permissão para editar'); throw new Error('not-owner'); }
   }
   if(docSize(v) > MAX_DOC_BYTES){
     toast('Dados demasiado grandes (fotos a mais). Remova fotos.');
@@ -841,6 +841,7 @@ function docSize(o){ try{ return JSON.stringify(o).length; }catch(e){ return 0; 
 const SHOP = {name:'D.E.MOTORS', nif:'5001259431'};
 const shopHeader = ()=>`<div style="font-size:13px;margin-bottom:14px;"><b>${SHOP.name}</b> · NIF: ${SHOP.nif}</div>`;
 function esc(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function canEdit(){ if(isOwner()) return true; if(!currentUser) return false; const me = (typeof users!=='undefined' && users.find(x=>x.id===currentUser.id)); return !!((me && me.canEdit) || (!me && currentUser.canEdit)); }
 function isOwner(){ return !!currentUser && currentUser.role==='admin'; }
 function canSeePrices(){ return !!currentUser && (currentUser.role==='admin' || currentUser.role==='recepcao'); }
 function paidAmountOf(v){ return Math.max(0, Number(v.paidAmount)||0); }
@@ -914,7 +915,7 @@ function renderDashboard(main){
 
 /* ===================== Intake Form ===================== */
 function renderIntakeForm(main, existing){
-  if(existing && !isOwner()){ toast('Apenas o dono pode editar'); return; }
+  if(existing && !canEdit()){ toast('Sem permissão para editar'); return; }
   const v = existing || {plate:'',make:'',model:'',year:'',color:'',vin:'',mileage:'',
     ownerName:'',ownerPhone:'',ownerDoc:'',dateIn:new Date().toISOString().slice(0,10),
     expectedDate:'', reason:'', diagnosis:'', status:'waiting-diag',
@@ -1090,7 +1091,7 @@ function renderVehiclesList(main){
 /* ===================== Inventory (Estoque) ===================== */
 function renderInventory(main){
   main.innerHTML = `
-    <div class="pagehead"><h2>Estoque de Peças</h2>${isOwner()?'<button class="btn" id="add-inv-btn">+ Nova Peça</button>':''}</div>
+    <div class="pagehead"><h2>Estoque de Peças</h2>${canEdit()?'<button class="btn" id="add-inv-btn">+ Nova Peça</button>':''}</div>
     <div class="panel">
       <div class="stock-row header ${isOwner()?'':'nocost'}"><span>Peça</span><span>Qtd.</span><span>Mín.</span><span class="cost">Custo Unit.</span><span></span></div>
       <div id="inv-rows"></div>
@@ -1108,9 +1109,9 @@ function renderInventory(main){
     wrap.innerHTML = inventory.map(i=>{
       const low = Number(i.qty) <= Number(i.minQty||0);
       return `<div class="stock-row ${low?'low':''} ${isOwner()?'':'nocost'}" data-id="${i.id}">
-        <input class="inv-name ${isOwner()?'':'ro'}" placeholder="Nome da peça" value="${esc(i.name)}" ${isOwner()?'':'readonly'}>
-        <label class="mini"><span>Qtd.</span><input class="inv-qty ${isOwner()?'':'ro'}" type="number" value="${i.qty||0}" ${isOwner()?'':'readonly'}></label>
-        <label class="mini"><span>Mín.</span><input class="inv-min ${isOwner()?'':'ro'}" type="number" value="${i.minQty||0}" ${isOwner()?'':'readonly'}></label>
+        <input class="inv-name ${canEdit()?'':'ro'}" placeholder="Nome da peça" value="${esc(i.name)}" ${canEdit()?'':'readonly'}>
+        <label class="mini"><span>Qtd.</span><input class="inv-qty ${canEdit()?'':'ro'}" type="number" value="${i.qty||0}" ${canEdit()?'':'readonly'}></label>
+        <label class="mini"><span>Mín.</span><input class="inv-min ${canEdit()?'':'ro'}" type="number" value="${i.minQty||0}" ${canEdit()?'':'readonly'}></label>
         <label class="mini cost"><span>Custo unit.</span><input class="inv-cost" type="number" value="${i.cost||0}"></label>
         ${isOwner() ? `<button class="close-x inv-del" style="font-size:18px;">&times;</button>` : '<span></span>'}
       </div>`;
@@ -1119,7 +1120,7 @@ function renderInventory(main){
       const id = row.dataset.id;
       const item = inventory.find(x=>x.id===id);
       const commit = ()=>{
-        if(!isOwner()) return;
+        if(!canEdit()) return;
         saveInventoryItem({
           id,
           name: row.querySelector('.inv-name').value,
@@ -1150,7 +1151,7 @@ function renderReminders(main){
             <b>${esc(v.plate)} — ${esc(v.make)} ${esc(v.model)}</b>
             <span>${esc(v.ownerName)||'—'} · ${esc(v.ownerPhone)||'—'} · Revisão prevista: ${fmtDate(v.nextServiceDate)}${overdue?' (atrasada)':''}</span>
           </div>
-          ${isOwner() ? '<button class="btn small secondary mark-contacted">Marcar como contactado</button>' : ''}
+          ${canEdit() ? '<button class="btn small secondary mark-contacted">Marcar como contactado</button>' : ''}
         </div>`;
       }).join('') : '<div class="empty-state">Sem lembretes pendentes nos próximos 30 dias.</div>'}
     </div>
@@ -1311,12 +1312,22 @@ function renderTeam(main){
     wrap.innerHTML = users.map(u=>`
       <div class="team-row" data-id="${u.id}">
         <div><div class="u-name">${esc(u.name)}${u.id===currentUser.id?' (você)':''}</div><span class="u-role">${ROLE_LABELS[u.role]||''}</span></div>
-        <div style="display:flex;gap:8px;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+          ${u.role!=='admin' ? `<label class="mini" style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;"><input type="checkbox" class="canedit-chk" ${u.canEdit?'checked':''}> Pode editar</label>` : '<span style="font-size:12px;color:var(--text-dim);">Pode tudo</span>'}
           <button class="btn small secondary reset-pin-btn">Repor PIN</button>
           ${u.id!==currentUser.id ? `<button class="btn small danger del-user-btn">Remover</button>` : ''}
         </div>
       </div>
     `).join('');
+    wrap.querySelectorAll('.canedit-chk').forEach(chk=>{
+      chk.addEventListener('change', async (e)=>{
+        const id = e.target.closest('.team-row').dataset.id;
+        const u = users.find(x=>x.id===id); if(!u) return;
+        const val = e.target.checked;
+        try{ await saveUserAccount({...u, canEdit:val}); u.canEdit = val; toast(val ? u.name+' já pode editar' : u.name+' já não pode editar'); }
+        catch(err){ e.target.checked = !val; toast('Erro: '+(err.code||err.message)); }
+      });
+    });
     wrap.querySelectorAll('.reset-pin-btn').forEach(btn=>{
       btn.addEventListener('click', async (e)=>{
         const id = e.target.closest('.team-row').dataset.id;
@@ -1329,6 +1340,7 @@ function renderTeam(main){
             await auth.currentUser.updatePassword(pinPass(newPin.trim()));
           } else if(FIREBASE_OK){
             const newId = await createStaffAccount(u.name, u.role, newPin.trim());
+            if(u.canEdit) await db.collection('staff').doc(newId).set({canEdit:true},{merge:true});
             await db.collection('staff').doc(u.id).delete();
           } else { await saveUserAccount({...u, pin:newPin.trim()}); }
         }catch(err){ console.error(err); toast('Erro: ' + (err.code||err.message)); return; }
@@ -1371,7 +1383,7 @@ function openVehicleModal(id){
     </select>
 
     <div class="section-title">Observações do Diagnóstico</div>
-    <textarea id="m-diagnosis" rows="2" ${(!isOwner()&&v.diagnosis)?'readonly class="ro"':''}>${esc(v.diagnosis)}</textarea>
+    <textarea id="m-diagnosis" rows="2" ${(!canEdit()&&v.diagnosis)?'readonly class="ro"':''}>${esc(v.diagnosis)}</textarea>
 
     <div class="section-title">Diagnóstico / Mão de Obra</div>
     <div id="services-rows"></div>
@@ -1438,7 +1450,7 @@ function openVehicleModal(id){
       ${canSeePrices() ? `<button class="btn secondary" id="proforma-btn">Proforma (Orçamento)</button>
       <button class="btn secondary" id="invoice-btn">Ver Fatura / Exportar PDF</button>` : ''}
       <button class="btn secondary" id="report-btn">Relatório de Manutenção (PDF)</button>
-      ${isOwner() ? `<button class="btn secondary" id="edit-full-btn">Editar Dados da Viatura</button>` : ''}
+      ${canEdit() ? `<button class="btn secondary" id="edit-full-btn">Editar Dados da Viatura</button>` : ''}
       ${isOwner() ? `<button class="btn danger" id="delete-btn">Eliminar</button>` : ''}
     </div>
   </div>`;
@@ -1450,7 +1462,7 @@ function openVehicleModal(id){
   function renderServiceRows(){
     document.getElementById('services-rows').innerHTML = services.map((s,i)=>`
       <div class="row-item svc ${canSeePrices()?'':'nocost'}">
-        <input data-i="${i}" class="svc-desc ${(!isOwner()&&!s._new&&(s.desc||s.cost))?'ro':''}" placeholder="Descrição" value="${esc(s.desc)}" ${(!isOwner()&&!s._new&&(s.desc||s.cost))?'readonly':''}>
+        <input data-i="${i}" class="svc-desc ${(!canEdit()&&!s._new&&(s.desc||s.cost))?'ro':''}" placeholder="Descrição" value="${esc(s.desc)}" ${(!canEdit()&&!s._new&&(s.desc||s.cost))?'readonly':''}>
         ${canSeePrices() ? `<input data-i="${i}" class="svc-cost ${isOwner()?'':'ro'}" type="number" placeholder="Custo" value="${s.cost||0}" ${isOwner()?'':'readonly'}>` : ''}
         ${isOwner() || !(s.desc||s.cost) || s._new ? `<button data-i="${i}" class="close-x svc-del" style="font-size:18px;">&times;</button>` : '<span></span>'}
       </div>`).join('');
@@ -1461,8 +1473,8 @@ function openVehicleModal(id){
   function renderPartRows(){
     document.getElementById('parts-rows').innerHTML = parts.map((p,i)=>`
       <div class="row-item prt ${canSeePrices()?'':'nocost'}">
-        <input data-i="${i}" class="prt-name ${(!isOwner()&&!p._new)?'ro':''}" placeholder="Nome da peça" value="${esc(p.name)}" ${(!isOwner()&&!p._new)?'readonly':''}>
-        <input data-i="${i}" class="prt-qty ${(!isOwner()&&!p._new)?'ro':''}" type="number" placeholder="Qtd" value="${p.qty||1}" ${(!isOwner()&&!p._new)?'readonly':''}>
+        <input data-i="${i}" class="prt-name ${(!canEdit()&&!p._new)?'ro':''}" placeholder="Nome da peça" value="${esc(p.name)}" ${(!canEdit()&&!p._new)?'readonly':''}>
+        <input data-i="${i}" class="prt-qty ${(!canEdit()&&!p._new)?'ro':''}" type="number" placeholder="Qtd" value="${p.qty||1}" ${(!canEdit()&&!p._new)?'readonly':''}>
         ${canSeePrices() ? `<input data-i="${i}" class="prt-cost ${isOwner()?'':'ro'}" type="number" placeholder="Custo unit." value="${p.cost||0}" ${isOwner()?'':'readonly'}>` : ''}
         ${isOwner() || p._new ? `<button data-i="${i}" class="close-x prt-del" style="font-size:18px;">&times;</button>` : '<span></span>'}
       </div>`).join('');
@@ -1652,7 +1664,7 @@ function openVehicleModal(id){
   });
 
   /* Só o dono pode editar ou eliminar: os outros utilizadores só consultam. */
-  if(!isOwner()){
+  if(!canEdit()){
     overlay.querySelectorAll('input,select,textarea').forEach(el=>{ el.disabled = true; });
     const _canStatus = currentUser && currentUser.role==='mecanico';
     if(_canStatus){ const st=document.getElementById('m-status'); if(st) st.disabled=false; }
@@ -1661,7 +1673,7 @@ function openVehicleModal(id){
     const note = document.createElement('div');
     note.className = 'no-print';
     note.style.cssText = 'background:#fef3c7;color:#78350f;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600;margin:8px 0;';
-    note.textContent = _canStatus ? 'Só o dono pode editar ou eliminar. Pode apenas mudar o estado da viatura.' : 'Só o dono pode editar ou eliminar. Aqui só pode consultar.';
+    note.textContent = _canStatus ? 'Sem permissão para editar. Pode apenas mudar o estado da viatura.' : 'Sem permissão para editar. Aqui só pode consultar.';
     const head = overlay.querySelector('.modal-head'); if(head) head.insertAdjacentElement('afterend', note);
     if(_canStatus){
       const st = document.getElementById('m-status');
@@ -1819,7 +1831,7 @@ subscribeUsers();
 <script>document.addEventListener('focusin',function(e){var t=e.target;if(t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)){setTimeout(function(){try{t.scrollIntoView({block:'center',behavior:'smooth'});}catch(_){}},350);}});</script>
 <script>
 /* ===== Aviso de nova versão ===== */
-const APP_VERSION = '2026-11-06-v6';
+const APP_VERSION = '2026-11-07-v7';
 (function(){
   var bar = null;
   function show(){
